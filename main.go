@@ -1,7 +1,12 @@
 package main
 
-import "fmt"
+import (
+	"depact/parser"
+	"fmt"
+)
 
 func main() {
-	fmt.Println("Hello")
+	ok := []byte("Hello\n")
+	fmt.Println(ok[5])
+	_ = parser.Parser{}
 }
