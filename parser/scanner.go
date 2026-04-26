@@ -29,15 +29,20 @@ func (s *scanner) scan() ([]Import, []Export) {
 			case char == '/' && s.i+1 < len(s.src) && s.src[s.i+1] == '/':
 				s.state = lineComment
 				s.i++
+
 			case char == '/' && s.i+1 < len(s.src) && s.src[s.i+1] == '*':
 				s.state = blockComment
 				s.i++
+
 			case char == '"':
 				s.state = stringDouble
+
 			case char == '\'':
 				s.state = stringSingle
+
 			case char == '`':
 				s.state = template
+
 			default:
 				s.parseCode()
 			}
@@ -79,42 +84,79 @@ func (s *scanner) parseCode() {
 	if !s.isWord([]byte("import")) {
 		return
 	}
-	// TODO: export (for wasted symbols)
-	edge := Import{}
+
+	imp := Import{}
+	exp := Export{}
+
+	s.skipSpace()
+
+	onlyTypes := false
+	if s.src[s.i] == 't' && s.nextWord() == "type" {
+		onlyTypes = true
+		s.skipSpace()
+	}
+
 outer:
-	for {
-		char := s.src[s.i]
-		switch char {
-		case ' ':
-			s.i++
-			continue
+	for s.i < len(s.src) {
+		switch s.src[s.i] {
 		case '"', '\'':
-			if len(edge.symbols) == 0 {
-				edge.Kind = SideEffectEdge
+			imp.Kind = SideEffectEdge
+			imp.From = s.readString()
+			break outer
+
+		case '{':
+			imp.Kind = NamedEdge
+			s.i++
+			for {
+				s.skipSpace()
+				if s.src[s.i] == '}' {
+					s.i++
+					break
+				}
+				if s.src[s.i] == ',' {
+					s.i++
+					continue
+				}
+				imp.Symbols = append(imp.Symbols, s.symbolFromNextWord(onlyTypes))
 			}
 			s.i++
-			edge.from = string(s.walkUntil(char))
-			break outer
-		case '{':
-		// TODO
+			s.skipSpace()
+			s.nextWord() // from
+			s.skipSpace()
+			imp.From = s.readString()
+
+		case '(':
+			imp.Kind = DynamicEdge
+			s.i++
+			imp.From = s.readString()
+			s.i++
+
 		case '*':
-		// TODO
+			imp.Kind = NamespaceEdge
+			s.i++
+			s.skipSpace()
+			s.nextWord() // as
+			s.skipSpace()
+			imp.Symbols = append(imp.Symbols, s.symbolFromNextWord(onlyTypes))
+			s.skipSpace()
+			s.nextWord() // from
+			s.skipSpace()
+			imp.From = s.readString()
+
 		default:
-			symbol := string(s.walkUntil(' '))
-			if symbol == "from" {
-				continue
-			}
-			if symbol == "type" {
-				edge.typeOnly = true
-				continue
-			}
-			edge.Kind = DefaultEdge
-			edge.symbols = []string{(symbol)}
+			imp.Kind = DefaultEdge
+			imp.Symbols = append(imp.Symbols, s.symbolFromNextWord(onlyTypes))
+			s.skipSpace()
+			s.nextWord() // from
+			s.skipSpace()
+			imp.From = s.readString()
 		}
 
 		s.i++
 	}
-	s.imports = append(s.imports, edge)
+
+	s.imports = append(s.imports, imp)
+	s.exports = append(s.exports, exp)
 }
 
 func (s *scanner) isWord(word []byte) bool {
@@ -128,10 +170,48 @@ func (s *scanner) isWord(word []byte) bool {
 	return true
 }
 
-func (s *scanner) walkUntil(char byte) []byte {
+func (s *scanner) nextWord() string {
 	pos := s.i
-	for s.src[s.i] != char {
+	for isLetter(s.src[s.i]) {
 		s.i++
 	}
-	return s.src[pos:s.i]
+	return string(s.src[pos:s.i])
+}
+
+func (s *scanner) skipSpace() {
+	for s.i < len(s.src) {
+		char := s.src[s.i]
+		if char == ' ' || char == '\t' || char == '\n' || char == '\r' {
+			s.i++
+		} else {
+			break
+		}
+	}
+}
+
+func (s *scanner) readString() string {
+	quote := s.src[s.i]
+	s.i++
+	start := s.i
+	for s.src[s.i] != quote {
+		s.i++
+	}
+	s.i++
+	return string(s.src[start : s.i-1])
+}
+
+func isLetter(char byte) bool {
+	return 'a' <= char && char <= 'z' || 'A' <= char && char <= 'Z' || char == '_'
+}
+
+func (s *scanner) symbolFromNextWord(onlyTypes bool) Symbol {
+	symbol := Symbol{Name: s.nextWord()}
+	if symbol.Name == "type" {
+		symbol.TypeOnly = true
+		s.skipSpace()
+		symbol.Name = s.nextWord()
+	} else if onlyTypes {
+		symbol.TypeOnly = true
+	}
+	return symbol
 }

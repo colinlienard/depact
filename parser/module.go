@@ -1,5 +1,10 @@
 package parser
 
+type Symbol struct {
+	Name     string
+	TypeOnly bool
+}
+
 type EdgeType int
 
 const (
@@ -11,20 +16,30 @@ const (
 )
 
 type Import struct {
-	Kind     EdgeType
-	typeOnly bool
-	from     string
-	symbols  []string
+	Kind    EdgeType
+	From    string
+	Symbols []Symbol
 }
 
 type Export struct {
-	Kind     EdgeType
-	typeOnly bool
-	symbols  []string
+	Kind    EdgeType
+	Symbols []Symbol
 }
 
 type Module struct {
 	Path    string
 	Imports []Import
 	Exports []Export
+}
+
+func (i Import) TypeOnly() bool {
+	if len(i.Symbols) == 0 {
+		return false
+	}
+	for _, s := range i.Symbols {
+		if !s.TypeOnly {
+			return false
+		}
+	}
+	return true
 }
