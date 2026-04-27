@@ -23,7 +23,7 @@ func TestScannerEveryImport(t *testing.T) {
 		{"mixed default and named", "import type foo, { bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSym, Name: "foo", TypeOnly: true}, {Kind: NamedSym, Name: "bar", TypeOnly: true}}}},
 		{"namepace type import", "import type * as foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamespaceSym, Name: "foo", TypeOnly: true}}}},
 		{"dynamic import", "import('mod')", Import{From: "mod", Dynamic: true}},
-		{"dynamic import with with whitespace", "import ('mod')", Import{From: "mod", Dynamic: true}},
+		{"dynamic import with with whitespaces", "import ( 'mod' )", Import{From: "mod", Dynamic: true}},
 
 		{"no spaces", "import{foo}from'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}},
 		{"extra spaces", "import   {   foo  ,  bar   }   from   'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}},
@@ -74,6 +74,11 @@ func TestScannerNonImports(t *testing.T) {
 		{"reimport identifier", "const reimport = 1"},
 		{"property access import", "obj.import('mod')"},
 		{"property access import with chain", "foo.import.bar"},
+		{"import.meta", "console.log(import.meta)"},
+		{"import.meta.ENV", "const e = import.meta.ENV.MODE"},
+		{"jsdoc block comment", "/** @type {string} */\nconst x = 1"},
+		{"dynamic import with non-literal argument", "import(somePath)"},
+		{"dynamic import with template literal argument", "import(`mod`)"},
 		{"export-like identifier", "let exported = 1"},
 		{"empty source", ""},
 		{"no imports at all", "const x = 1\nfunction y() { return x }"},
@@ -86,6 +91,30 @@ func TestScannerNonImports(t *testing.T) {
 
 			if len(imports) != 0 {
 				t.Errorf("expected 0 imports, got %d: %+v", len(imports), imports)
+			}
+		})
+	}
+}
+
+func TestScannerErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"missing as in namespace import", "import * foo from 'mod'"},
+		{"missing from after named import", "import { foo } 'mod'"},
+		{"missing from after default import", "import foo 'mod'"},
+		{"unterminated string", "import foo from 'mod"},
+		{"unterminated dynamic import string", "import('mod"},
+		{"namespace import missing identifier after as", "import * as from 'mod'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scanner := &scanner{src: []byte(tt.input)}
+			_, _, err := scanner.scan()
+			if err == nil {
+				t.Errorf("expected error, got nil")
 			}
 		})
 	}

@@ -1,6 +1,15 @@
 package parser
 
-import "fmt"
+import (
+	"fmt"
+)
+
+var (
+	importKeyword = []byte("import")
+	exportKeyword = []byte("export")
+	fromKeyword   = []byte("from")
+	asKeyword     = []byte("as")
+)
 
 type state int
 
@@ -73,7 +82,7 @@ func (s *scanner) scan() ([]Import, []Export, error) {
 					top.depth--
 				}
 
-			default:
+			case char == 'i' || char == 'e': // import/export
 				if err := s.parseCode(); err != nil {
 					return nil, nil, err
 				}
@@ -125,14 +134,17 @@ func (s *scanner) scan() ([]Import, []Export, error) {
 }
 
 func (s *scanner) parseCode() error {
-	if !s.isWord([]byte("import")) && !s.isWord([]byte("export")) {
+	if !s.isWord(importKeyword) && !s.isWord(exportKeyword) {
 		return nil
 	}
 
 	imp := Import{}
-	exp := Export{}
 
 	s.skipSpace()
+
+	if s.peek() == '.' {
+		return nil // import.meta
+	}
 
 	onlyTypes := false
 	if s.peek() == 't' {
@@ -155,13 +167,18 @@ func (s *scanner) parseCode() error {
 		imp.From = from
 
 	case '(':
-		imp.Dynamic = true
 		s.i++
+		s.skipSpace()
+		if s.peek() != '"' && s.peek() != '\'' {
+			return nil // unsupported dynamic import with non-literal argument
+		}
+		imp.Dynamic = true
 		from, err := s.readString()
 		if err != nil {
 			return err
 		}
 		imp.From = from
+		s.skipSpace()
 		s.i++
 
 	default:
@@ -182,7 +199,7 @@ func (s *scanner) parseCode() error {
 		if s.peek() == '*' {
 			s.i++
 			s.skipSpace()
-			if isAs := s.isWord([]byte("as")); !isAs {
+			if isAs := s.isWord(asKeyword); !isAs {
 				return fmt.Errorf("expected 'as' after '*' in namespace import")
 			}
 			s.skipSpace()
@@ -214,7 +231,7 @@ func (s *scanner) parseCode() error {
 		}
 
 		s.skipSpace()
-		if isFrom := s.isWord([]byte("from")); !isFrom {
+		if isFrom := s.isWord(fromKeyword); !isFrom {
 			return fmt.Errorf("expected 'from' after import/export symbols")
 		}
 		s.skipSpace()
@@ -226,7 +243,6 @@ func (s *scanner) parseCode() error {
 	}
 
 	s.imports = append(s.imports, imp)
-	s.exports = append(s.exports, exp)
 
 	return nil
 }
@@ -249,6 +265,12 @@ func (s *scanner) isWord(word []byte) bool {
 	if s.i+len(word) > len(s.src) {
 		return false
 	}
+	for i := range len(word) {
+		c := word[i]
+		if c != s.peekAt(i) {
+			return false
+		}
+	}
 	if s.i > 0 {
 		prev := s.peekAt(-1)
 		if isLetter(prev) || prev == '.' {
@@ -257,12 +279,6 @@ func (s *scanner) isWord(word []byte) bool {
 	}
 	if s.i+len(word) < len(s.src) && isLetter(s.peekAt(len(word))) {
 		return false
-	}
-	for i := range len(word) {
-		c := word[i]
-		if c != s.peekAt(i) {
-			return false
-		}
 	}
 	s.i += len(word)
 	return true
@@ -326,7 +342,7 @@ func (s *scanner) symbolFromNextWord(onlyTypes bool) (Symbol, error) {
 		symbol.Name = word
 	}
 	s.skipSpace()
-	if s.isWord([]byte("as")) {
+	if s.isWord(asKeyword) {
 		s.skipSpace()
 		word, err := s.nextWord()
 		if err != nil {
