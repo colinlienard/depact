@@ -1,5 +1,7 @@
 package parser
 
+import "fmt"
+
 type state int
 
 const (
@@ -11,37 +13,65 @@ const (
 	template           // `...`
 )
 
+type frame struct {
+	state state
+	depth int // brace depth, used only for code frames pushed by `${`
+}
+
 type scanner struct {
 	src     []byte
-	state   state
+	stack   []frame
 	i       int
 	imports []Import
 	exports []Export
 }
 
+func (s *scanner) push(st state) {
+	s.stack = append(s.stack, frame{state: st})
+}
+
+func (s *scanner) pop() {
+	s.stack = s.stack[:len(s.stack)-1]
+}
+
 func (s *scanner) scan() ([]Import, []Export, error) {
+	if len(s.stack) == 0 {
+		s.push(code)
+	}
+
 	for s.i < len(s.src) {
 		char := s.peek()
+		top := &s.stack[len(s.stack)-1]
 
-		switch s.state {
+		switch top.state {
 		case code:
 			switch {
 			case char == '/' && s.i+1 < len(s.src) && s.peekAt(1) == '/':
-				s.state = lineComment
+				s.push(lineComment)
 				s.i++
 
 			case char == '/' && s.i+1 < len(s.src) && s.peekAt(1) == '*':
-				s.state = blockComment
+				s.push(blockComment)
 				s.i++
 
 			case char == '"':
-				s.state = stringDouble
+				s.push(stringDouble)
 
 			case char == '\'':
-				s.state = stringSingle
+				s.push(stringSingle)
 
 			case char == '`':
-				s.state = template
+				s.push(template)
+
+			case char == '{' && len(s.stack) > 1:
+				top.depth++
+
+			case char == '}' && len(s.stack) > 1:
+				if top.depth == 0 {
+					s.pop() // closing brace of `${...}`
+				} else {
+					top.depth--
+				}
 
 			default:
 				if err := s.parseCode(); err != nil {
@@ -51,28 +81,40 @@ func (s *scanner) scan() ([]Import, []Export, error) {
 
 		case lineComment:
 			if char == '\n' {
-				s.state = code
+				s.pop()
 			}
 
 		case blockComment:
 			if char == '*' && s.i+1 < len(s.src) && s.peekAt(1) == '/' {
-				s.state = code
+				s.pop()
 				s.i++
 			}
 
-		case stringDouble: // TODO: handle \\"
-			if char == '"' && s.i > 0 && s.peekAt(-1) != '\\' {
-				s.state = code
+		case stringDouble:
+			switch char {
+			case '\\':
+				s.i++
+			case '"':
+				s.pop()
 			}
 
-		case stringSingle: // TODO: handle \\'
-			if char == '\'' && s.i > 0 && s.peekAt(-1) != '\\' {
-				s.state = code
+		case stringSingle:
+			switch char {
+			case '\\':
+				s.i++
+			case '\'':
+				s.pop()
 			}
 
-		case template: // TODO: handle `${}`
-			if char == '`' {
-				s.state = code
+		case template:
+			switch {
+			case char == '\\':
+				s.i++
+			case char == '$' && s.peekAt(1) == '{':
+				s.push(code)
+				s.i++
+			case char == '`':
+				s.pop()
 			}
 		}
 
@@ -106,66 +148,77 @@ func (s *scanner) parseCode() error {
 
 	switch s.peek() {
 	case '"', '\'':
-		imp.Kind = SideEffectEdge
-		imp.From = s.readString()
+		from, err := s.readString()
+		if err != nil {
+			return err
+		}
+		imp.From = from
 
-	case '{':
-		imp.Kind = NamedEdge
+	case '(':
+		imp.Dynamic = true
 		s.i++
-		for {
-			s.skipSpace()
-			if s.peek() == '}' {
-				s.i++
-				break
-			}
-			if s.peek() == ',' {
-				s.i++
-				continue
-			}
+		from, err := s.readString()
+		if err != nil {
+			return err
+		}
+		imp.From = from
+		s.i++
+
+	default:
+		if s.peek() != '{' && s.peek() != '*' {
 			sym, err := s.symbolFromNextWord(onlyTypes)
 			if err != nil {
 				return err
 			}
+			sym.Kind = DefaultSym
 			imp.Symbols = append(imp.Symbols, sym)
+			s.skipSpace()
+			if s.peek() == ',' {
+				s.i++
+				s.skipSpace()
+			}
 		}
+
+		if s.peek() == '*' {
+			s.i++
+			s.skipSpace()
+			s.nextWord() // as
+			s.skipSpace()
+			sym, err := s.symbolFromNextWord(onlyTypes)
+			if err != nil {
+				return err
+			}
+			sym.Kind = NamespaceSym
+			imp.Symbols = append(imp.Symbols, sym)
+		} else if s.peek() == '{' {
+			s.i++
+			for {
+				s.skipSpace()
+				if s.peek() == '}' {
+					s.i++
+					break
+				}
+				if s.peek() == ',' {
+					s.i++
+					continue
+				}
+				sym, err := s.symbolFromNextWord(onlyTypes)
+				if err != nil {
+					return err
+				}
+				sym.Kind = NamedSym
+				imp.Symbols = append(imp.Symbols, sym)
+			}
+		}
+
 		s.skipSpace()
 		s.nextWord() // from
 		s.skipSpace()
-		imp.From = s.readString()
-
-	case '(':
-		imp.Kind = DynamicEdge
-		s.i++
-		imp.From = s.readString()
-		s.i++
-
-	case '*':
-		imp.Kind = NamespaceEdge
-		s.i++
-		s.skipSpace()
-		s.nextWord() // as
-		s.skipSpace()
-		sym, err := s.symbolFromNextWord(onlyTypes)
+		from, err := s.readString()
 		if err != nil {
 			return err
 		}
-		imp.Symbols = append(imp.Symbols, sym)
-		s.skipSpace()
-		s.nextWord() // from
-		s.skipSpace()
-		imp.From = s.readString()
-
-	default:
-		imp.Kind = DefaultEdge
-		sym, err := s.symbolFromNextWord(onlyTypes)
-		if err != nil {
-			return err
-		}
-		imp.Symbols = append(imp.Symbols, sym)
-		s.skipSpace()
-		s.nextWord() // from
-		s.skipSpace()
-		imp.From = s.readString()
+		imp.From = from
 	}
 
 	s.imports = append(s.imports, imp)
@@ -192,7 +245,13 @@ func (s *scanner) isWord(word []byte) bool {
 	if s.i+len(word) > len(s.src) {
 		return false
 	}
-	if (s.i > 0 && !isLetter(s.peekAt(-1))) || (s.i+len(word) > len(s.src) && !isLetter(s.peekAt(len(word)))) {
+	if s.i > 0 {
+		prev := s.peekAt(-1)
+		if isLetter(prev) || prev == '.' {
+			return false
+		}
+	}
+	if s.i+len(word) < len(s.src) && isLetter(s.peekAt(len(word))) {
 		return false
 	}
 	for i := range len(word) {
@@ -205,11 +264,13 @@ func (s *scanner) isWord(word []byte) bool {
 	return true
 }
 
-// TODO: handle error ""
 func (s *scanner) nextWord() (string, error) {
 	pos := s.i
 	for isLetter(s.peek()) {
 		s.i++
+	}
+	if pos == s.i {
+		return "", fmt.Errorf("expected word, got nothing")
 	}
 	return string(s.src[pos:s.i]), nil
 }
@@ -225,16 +286,21 @@ func (s *scanner) skipSpace() {
 	}
 }
 
-// TODO: handle error no closing quote
-func (s *scanner) readString() string {
+func (s *scanner) readString() (string, error) {
 	quote := s.peek()
 	s.i++
 	start := s.i
-	for s.peek() != quote {
+	for {
+		if s.peek() == quote {
+			break
+		}
+		if s.peek() == 0 {
+			return "", fmt.Errorf("expected closing quote, got EOF")
+		}
 		s.i++
 	}
 	s.i++
-	return string(s.src[start : s.i-1])
+	return string(s.src[start : s.i-1]), nil
 }
 
 func isLetter(char byte) bool {
@@ -246,7 +312,7 @@ func (s *scanner) symbolFromNextWord(onlyTypes bool) (Symbol, error) {
 	if err != nil {
 		return Symbol{}, err
 	}
-	symbol := Symbol{Name: word}
+	symbol := Symbol{Name: word, TypeOnly: onlyTypes}
 	if symbol.Name == "type" {
 		symbol.TypeOnly = true
 		s.skipSpace()
@@ -255,8 +321,15 @@ func (s *scanner) symbolFromNextWord(onlyTypes bool) (Symbol, error) {
 			return Symbol{}, err
 		}
 		symbol.Name = word
-	} else if onlyTypes {
-		symbol.TypeOnly = true
+	}
+	s.skipSpace()
+	if s.isWord([]byte("as")) {
+		s.skipSpace()
+		word, err := s.nextWord()
+		if err != nil {
+			return Symbol{}, err
+		}
+		symbol.Alias = word
 	}
 	return symbol, nil
 }

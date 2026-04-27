@@ -1,28 +1,27 @@
 package parser
 
+type SymbolKind int
+
+const (
+	DefaultSym SymbolKind = iota
+	NamedSym
+	NamespaceSym
+)
+
 type Symbol struct {
+	Kind     SymbolKind
 	Name     string
+	Alias    string
 	TypeOnly bool
 }
 
-type EdgeType int
-
-const (
-	DefaultEdge EdgeType = iota
-	NamedEdge
-	NamespaceEdge
-	SideEffectEdge
-	DynamicEdge
-)
-
 type Import struct {
-	Kind    EdgeType
 	From    string
-	Symbols []Symbol
+	Symbols []Symbol // empty = side-effect
+	Dynamic bool
 }
 
 type Export struct {
-	Kind    EdgeType
 	Symbols []Symbol
 }
 
