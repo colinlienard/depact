@@ -16,13 +16,14 @@ func TestScannerEveryImport(t *testing.T) {
 		{"default import", "import foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSym, Name: "foo"}}}},
 		{"default type import", "import type foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSym, Name: "foo", TypeOnly: true}}}},
 		{"named imports", "import { foo, bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}},
-		{"renamed imports", "import { foo as bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", Alias: "bar"}}}},
+		{"renamed imports", "import { foo as foo2 } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", Alias: "foo2"}}}},
 		{"named type imports", "import { type foo, bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", TypeOnly: true}, {Kind: NamedSym, Name: "bar"}}}},
 		{"named only type imports", "import type { foo, bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", TypeOnly: true}, {Kind: NamedSym, Name: "bar", TypeOnly: true}}}},
 		{"namepace import", "import * as foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamespaceSym, Name: "foo"}}}},
 		{"mixed default and named", "import type foo, { bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSym, Name: "foo", TypeOnly: true}, {Kind: NamedSym, Name: "bar", TypeOnly: true}}}},
 		{"namepace type import", "import type * as foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamespaceSym, Name: "foo", TypeOnly: true}}}},
 		{"dynamic import", "import('mod')", Import{From: "mod", Dynamic: true}},
+		{"dynamic import with with whitespace", "import ('mod')", Import{From: "mod", Dynamic: true}},
 
 		{"no spaces", "import{foo}from'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}},
 		{"extra spaces", "import   {   foo  ,  bar   }   from   'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}},
@@ -87,5 +88,64 @@ func TestScannerNonImports(t *testing.T) {
 				t.Errorf("expected 0 imports, got %d: %+v", len(imports), imports)
 			}
 		})
+	}
+}
+
+func TestScannerMultipleImports(t *testing.T) {
+	src := "" +
+		"// header comment with import 'fake'\n" +
+		"import 'side-effect'\n" +
+		"import foo from \"./default\"\n" +
+		"import * as ns from 'namespace'\n" +
+		"import { a, b as bAlias, type c } from './named'\n" +
+		"import type { D, E } from 'types'\n" +
+		"import type Def, { Mixed } from 'mixed'\n" +
+		"\n" +
+		"const msg = `template ${import('dynamic')} ${`nested ${1}`} end`\n" +
+		"const s1 = \"import fake from 'nope'\"\n" +
+		"const s2 = 'import fake from \"nope\"'\n" +
+		"/* import fake from 'nope' */\n" +
+		"obj.import('not-an-import')\n" +
+		"\n" +
+		"import { last1, last2, } from 'trailing'\n"
+
+	expected := []Import{
+		{From: "side-effect"},
+		{From: "./default", Symbols: []Symbol{{Kind: DefaultSym, Name: "foo"}}},
+		{From: "namespace", Symbols: []Symbol{{Kind: NamespaceSym, Name: "ns"}}},
+		{From: "./named", Symbols: []Symbol{
+			{Kind: NamedSym, Name: "a"},
+			{Kind: NamedSym, Name: "b", Alias: "bAlias"},
+			{Kind: NamedSym, Name: "c", TypeOnly: true},
+		}},
+		{From: "types", Symbols: []Symbol{
+			{Kind: NamedSym, Name: "D", TypeOnly: true},
+			{Kind: NamedSym, Name: "E", TypeOnly: true},
+		}},
+		{From: "mixed", Symbols: []Symbol{
+			{Kind: DefaultSym, Name: "Def", TypeOnly: true},
+			{Kind: NamedSym, Name: "Mixed", TypeOnly: true},
+		}},
+		{From: "dynamic", Dynamic: true},
+		{From: "trailing", Symbols: []Symbol{
+			{Kind: NamedSym, Name: "last1"},
+			{Kind: NamedSym, Name: "last2"},
+		}},
+	}
+
+	scanner := &scanner{src: []byte(src)}
+	imports, _, err := scanner.scan()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(imports) != len(expected) {
+		t.Fatalf("expected %d imports, got %d: %+v", len(expected), len(imports), imports)
+	}
+
+	for i, want := range expected {
+		if !reflect.DeepEqual(imports[i], want) {
+			t.Errorf("import %d:\n  expected %+v\n  got      %+v", i, want, imports[i])
+		}
 	}
 }

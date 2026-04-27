@@ -182,7 +182,9 @@ func (s *scanner) parseCode() error {
 		if s.peek() == '*' {
 			s.i++
 			s.skipSpace()
-			s.nextWord() // as
+			if isAs := s.isWord([]byte("as")); !isAs {
+				return fmt.Errorf("expected 'as' after '*' in namespace import")
+			}
 			s.skipSpace()
 			sym, err := s.symbolFromNextWord(onlyTypes)
 			if err != nil {
@@ -212,7 +214,9 @@ func (s *scanner) parseCode() error {
 		}
 
 		s.skipSpace()
-		s.nextWord() // from
+		if isFrom := s.isWord([]byte("from")); !isFrom {
+			return fmt.Errorf("expected 'from' after import/export symbols")
+		}
 		s.skipSpace()
 		from, err := s.readString()
 		if err != nil {
@@ -299,12 +303,11 @@ func (s *scanner) readString() (string, error) {
 		}
 		s.i++
 	}
-	s.i++
-	return string(s.src[start : s.i-1]), nil
+	return string(s.src[start:s.i]), nil
 }
 
 func isLetter(char byte) bool {
-	return 'a' <= char && char <= 'z' || 'A' <= char && char <= 'Z' || char == '_'
+	return 'a' <= char && char <= 'z' || 'A' <= char && char <= 'Z' || '0' <= char && char <= '9' || char == '_'
 }
 
 func (s *scanner) symbolFromNextWord(onlyTypes bool) (Symbol, error) {
