@@ -1,7 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"depact/parser"
+)
 
 func main() {
-	fmt.Println("Hello")
+	_ = parser.Parse([]byte("import x from 'mod'"))
 }
