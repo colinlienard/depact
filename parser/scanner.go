@@ -287,9 +287,11 @@ func (s *scanner) parseExport() error {
 			}
 			symbol.Kind = NamespaceSymbol
 			exp.Symbols = append(exp.Symbols, symbol)
+		} else {
+			exp.Symbols = append(exp.Symbols, Symbol{Kind: NamespaceSymbol, TypeOnly: onlyTypes})
 		}
 		if isFrom := s.isWord(fromKeyword); !isFrom {
-			return fmt.Errorf("expected 'from' after import symbols")
+			return fmt.Errorf("expected 'from' after export symbols")
 		}
 		s.skipSpace()
 		from, err := s.readString()
@@ -311,7 +313,7 @@ func (s *scanner) parseExport() error {
 
 			switch word {
 			case "default":
-				exp.Symbols = append(exp.Symbols, Symbol{})
+				exp.Symbols = append(exp.Symbols, Symbol{Kind: DefaultSymbol})
 				s.exports = append(s.exports, exp)
 				return nil
 
@@ -319,6 +321,7 @@ func (s *scanner) parseExport() error {
 				onlyTypes = true
 
 			case "async", "abstract":
+				continue
 
 			case "const", "let", "var", "function", "class", "enum":
 				break outer
