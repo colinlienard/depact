@@ -22,6 +22,7 @@ type Import struct {
 }
 
 type Export struct {
+	From    string
 	Symbols []Symbol
 }
 

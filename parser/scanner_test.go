@@ -57,6 +57,115 @@ func TestScannerEveryImport(t *testing.T) {
 	}
 }
 
+func TestScannerEveryExport(t *testing.T) {
+	tests := []struct {
+		name            string
+		input           string
+		expectedImports []Import
+		expectedExports []Export
+	}{
+		{"named export", "export { foo }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		{"multiple named exports", "export { foo, bar }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}}},
+		{"renamed export", "export { foo as bar }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo", Alias: "bar"}}}}},
+		{"named export with inline type", "export { type foo, bar }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo", TypeOnly: true}, {Kind: NamedSym, Name: "bar"}}}}},
+		{"named only type exports", "export type { foo, bar }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo", TypeOnly: true}, {Kind: NamedSym, Name: "bar", TypeOnly: true}}}}},
+		{"trailing comma", "export { foo, bar, }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}}},
+
+		{"re-export named", "export { foo } from 'mod'",
+			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}},
+			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		{"re-export renamed", "export { foo as bar } from 'mod'",
+			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", Alias: "bar"}}}},
+			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", Alias: "bar"}}}}},
+		{"re-export type-only", "export type { foo } from 'mod'",
+			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", TypeOnly: true}}}},
+			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo", TypeOnly: true}}}}},
+		{"re-export star", "export * from 'mod'",
+			[]Import{{From: "mod"}},
+			[]Export{{From: "mod"}}},
+		{"re-export star as namespace", "export * as ns from 'mod'",
+			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamespaceSym, Name: "ns"}}}},
+			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamespaceSym, Name: "ns"}}}}},
+
+		// {"default export identifier", "export default foo", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSym, Name: "foo"}}}}},
+		// {"default export named function", "export default function bar() {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSym, Name: "bar"}}}}},
+		// {"default export named class", "export default class Bar {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSym, Name: "Bar"}}}}},
+
+		// {"export const", "export const foo = 1", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		// {"export let", "export let foo = 1", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		// {"export var", "export var foo = 1", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		// {"export function", "export function foo() {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		// {"export async function", "export async function foo() {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		// {"export class", "export class Foo {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "Foo"}}}}},
+		// {"export enum", "export enum Foo {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "Foo"}}}}},
+
+		// {"export type alias", "export type Foo = string", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "Foo", TypeOnly: true}}}}},
+		// {"export interface", "export interface Foo {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSym, Name: "Foo", TypeOnly: true}}}}},
+
+		// {"no spaces", "export{foo}from'mod'",
+		// 	[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}},
+		// 	[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}}}}},
+		// {"newlines between tokens", "export\n{\n\tfoo,\n\tbar,\n}\nfrom\n'mod'",
+		// 	[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}},
+		// 	[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSym, Name: "foo"}, {Kind: NamedSym, Name: "bar"}}}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scanner := &scanner{src: []byte(tt.input)}
+			imports, exports, err := scanner.scan()
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if !reflect.DeepEqual(imports, tt.expectedImports) {
+				t.Errorf("imports: expected %+v, got %+v", tt.expectedImports, imports)
+			}
+			if !reflect.DeepEqual(exports, tt.expectedExports) {
+				t.Errorf("exports: expected %+v, got %+v", tt.expectedExports, exports)
+			}
+		})
+	}
+}
+
+// func TestScannerNonExports(t *testing.T) {
+// 	tests := []struct {
+// 		name  string
+// 		input string
+// 	}{
+// 		{"line comment", "// export { foo }"},
+// 		{"block comment", "/* export { foo } from 'mod' */"},
+// 		{"export in double-quoted string", `const s = "export { foo }"`},
+// 		{"export in single-quoted string", `const s = 'export { foo }'`},
+// 		{"export in template literal", "const s = `export { foo }`"},
+// 		{"exported identifier", "let exported = 1"},
+// 		{"exporter identifier", "function exporter() {}"},
+// 		{"exports identifier", "let exports = {}"},
+// 		{"reexport identifier", "const reexport = 1"},
+// 		{"property access export", "obj.export = 1"},
+// 		{"property access export with chain", "foo.export.bar"},
+// 		{"empty source", ""},
+// 		{"no exports at all", "const x = 1\nfunction y() { return x }"},
+// 	}
+
+// 	for _, tt := range tests {
+// 		t.Run(tt.name, func(t *testing.T) {
+// 			scanner := &scanner{src: []byte(tt.input)}
+// 			imports, exports, err := scanner.scan()
+// 			if err != nil {
+// 				t.Fatalf("unexpected error: %v", err)
+// 			}
+
+// 			if len(exports) != 0 {
+// 				t.Errorf("expected 0 exports, got %d: %+v", len(exports), exports)
+// 			}
+// 			if len(imports) != 0 {
+// 				t.Errorf("expected 0 imports, got %d: %+v", len(imports), imports)
+// 			}
+// 		})
+// 	}
+// }
+
 func TestScannerNonImports(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -107,6 +216,13 @@ func TestScannerErrors(t *testing.T) {
 		{"unterminated string", "import foo from 'mod"},
 		{"unterminated dynamic import string", "import('mod"},
 		{"namespace import missing identifier after as", "import * as from 'mod'"},
+
+		// {"export missing from after named", "export { foo } 'mod'"},
+		// {"export missing from after star", "export * 'mod'"},
+		// {"export star as missing identifier", "export * as from 'mod'"},
+		// {"export unterminated named brace", "export { foo"},
+		// {"export unterminated string", "export { foo } from 'mod"},
+		// {"export star unterminated string", "export * from 'mod"},
 	}
 
 	for _, tt := range tests {

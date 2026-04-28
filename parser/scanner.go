@@ -55,6 +55,22 @@ func (s *scanner) scan() ([]Import, []Export, error) {
 		switch top.state {
 		case code:
 			switch {
+			case char == 'i':
+				if !s.isWord(importKeyword) {
+					break
+				}
+				if err := s.parseImport(); err != nil {
+					return nil, nil, err
+				}
+
+			case char == 'e':
+				if !s.isWord(exportKeyword) {
+					break
+				}
+				if err := s.parseExport(); err != nil {
+					return nil, nil, err
+				}
+
 			case char == '/' && s.i+1 < len(s.src) && s.peekAt(1) == '/':
 				s.push(lineComment)
 				s.i++
@@ -80,11 +96,6 @@ func (s *scanner) scan() ([]Import, []Export, error) {
 					s.pop() // closing brace of `${...}`
 				} else {
 					top.depth--
-				}
-
-			case char == 'i' || char == 'e': // import/export
-				if err := s.parseCode(); err != nil {
-					return nil, nil, err
 				}
 			}
 
@@ -133,11 +144,7 @@ func (s *scanner) scan() ([]Import, []Export, error) {
 	return s.imports, s.exports, nil
 }
 
-func (s *scanner) parseCode() error {
-	if !s.isWord(importKeyword) && !s.isWord(exportKeyword) {
-		return nil
-	}
-
+func (s *scanner) parseImport() error {
 	imp := Import{}
 
 	s.skipSpace()
@@ -210,29 +217,16 @@ func (s *scanner) parseCode() error {
 			sym.Kind = NamespaceSym
 			imp.Symbols = append(imp.Symbols, sym)
 		} else if s.peek() == '{' {
-			s.i++
-			for {
-				s.skipSpace()
-				if s.peek() == '}' {
-					s.i++
-					break
-				}
-				if s.peek() == ',' {
-					s.i++
-					continue
-				}
-				sym, err := s.symbolFromNextWord(onlyTypes)
-				if err != nil {
-					return err
-				}
-				sym.Kind = NamedSym
-				imp.Symbols = append(imp.Symbols, sym)
+			symbols, err := s.parseNamed(onlyTypes)
+			if err != nil {
+				return err
 			}
+			imp.Symbols = append(imp.Symbols, symbols...)
 		}
 
 		s.skipSpace()
 		if isFrom := s.isWord(fromKeyword); !isFrom {
-			return fmt.Errorf("expected 'from' after import/export symbols")
+			return fmt.Errorf("expected 'from' after import symbols")
 		}
 		s.skipSpace()
 		from, err := s.readString()
@@ -245,6 +239,93 @@ func (s *scanner) parseCode() error {
 	s.imports = append(s.imports, imp)
 
 	return nil
+}
+
+func (s *scanner) parseExport() error {
+	exp := Export{}
+
+	s.skipSpace()
+
+	onlyTypes := false
+	if s.peek() == 't' {
+		word, err := s.nextWord()
+		if err != nil {
+			return err
+		}
+		if word == "type" {
+			onlyTypes = true
+			s.skipSpace()
+		}
+	}
+
+	switch s.peek() {
+	case '{':
+		symbols, err := s.parseNamed(onlyTypes)
+		if err != nil {
+			return err
+		}
+		exp.Symbols = symbols
+		s.skipSpace()
+		if isFrom := s.isWord(fromKeyword); isFrom {
+			s.skipSpace()
+			from, err := s.readString()
+			if err != nil {
+				return err
+			}
+			exp.From = from
+			s.imports = append(s.imports, Import{From: from, Symbols: exp.Symbols})
+		}
+
+	case '*':
+		s.i++
+		s.skipSpace()
+		if isAs := s.isWord(asKeyword); isAs {
+			s.skipSpace()
+			sym, err := s.symbolFromNextWord(onlyTypes)
+			if err != nil {
+				return err
+			}
+			sym.Kind = NamespaceSym
+			exp.Symbols = append(exp.Symbols, sym)
+		}
+		if isFrom := s.isWord(fromKeyword); !isFrom {
+			return fmt.Errorf("expected 'from' after import symbols")
+		}
+		s.skipSpace()
+		from, err := s.readString()
+		if err != nil {
+			return err
+		}
+		exp.From = from
+		s.imports = append(s.imports, Import{From: from, Symbols: exp.Symbols})
+	}
+
+	s.exports = append(s.exports, exp)
+
+	return nil
+}
+
+func (s *scanner) parseNamed(onlyTypes bool) ([]Symbol, error) {
+	var symbols []Symbol
+	s.i++
+	for {
+		s.skipSpace()
+		if s.peek() == '}' {
+			s.i++
+			break
+		}
+		if s.peek() == ',' {
+			s.i++
+			continue
+		}
+		sym, err := s.symbolFromNextWord(onlyTypes)
+		if err != nil {
+			return nil, err
+		}
+		sym.Kind = NamedSym
+		symbols = append(symbols, sym)
+	}
+	return symbols, nil
 }
 
 func (s *scanner) peek() byte {
