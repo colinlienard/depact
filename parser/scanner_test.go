@@ -21,6 +21,10 @@ func TestScannerEveryImport(t *testing.T) {
 		{"named only type imports", "import type { foo, bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo", TypeOnly: true}, {Kind: NamedSymbol, Name: "bar", TypeOnly: true}}}},
 		{"namepace import", "import * as foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamespaceSymbol, Name: "foo"}}}},
 		{"mixed default and named", "import type foo, { bar } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo", TypeOnly: true}, {Kind: NamedSymbol, Name: "bar", TypeOnly: true}}}},
+		{"mixed default and namespace", "import foo, * as ns from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo"}, {Kind: NamespaceSymbol, Name: "ns"}}}},
+		{"default keyword as named alias", "import { default as foo } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "default", Alias: "foo"}}}},
+		{"empty named clause", "import {} from 'mod'", Import{From: "mod"}},
+		{"dollar identifier", "import $ from 'jquery'", Import{From: "jquery", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "$"}}}},
 		{"namepace type import", "import type * as foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamespaceSymbol, Name: "foo", TypeOnly: true}}}},
 		{"dynamic import", "import('mod')", Import{From: "mod", Dynamic: true}},
 		{"dynamic import with with whitespaces", "import ( 'mod' )", Import{From: "mod", Dynamic: true}},
@@ -87,9 +91,29 @@ func TestScannerEveryExport(t *testing.T) {
 			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamespaceSymbol, Name: "ns"}}}},
 			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamespaceSymbol, Name: "ns"}}}}},
 
-		{"default export identifier", "export default foo", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo"}}}}},
-		{"default export named function", "export default function bar() {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol, Name: "bar"}}}}},
-		{"default export named class", "export default class Bar {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol, Name: "Bar"}}}}},
+		{"default export identifier", "export default foo", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export named function", "export default function bar() {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export named class", "export default class Bar {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export anonymous function", "export default function() {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export anonymous class", "export default class {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export literal number", "export default 42", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export object literal", "export default { a: 1 }", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export async anonymous function", "export default async function() {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+		{"default export async named function", "export default async function bar() {}", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
+
+		{"empty named clause", "export {}", nil, []Export{{}}},
+		{"named export aliased to default", "export { foo as default }", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo", Alias: "default"}}}}},
+		{"re-export default as named", "export { default as foo } from 'mod'",
+			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "default", Alias: "foo"}}}},
+			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "default", Alias: "foo"}}}}},
+		{"re-export bare default", "export { default } from 'mod'",
+			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "default"}}}},
+			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "default"}}}}},
+
+		{"export abstract class", "export abstract class Foo {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "Foo"}}}}},
+		{"export declare const", "export declare const x: string", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "x", TypeOnly: true}}}}},
+		{"export declare class", "export declare class Foo {}", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "Foo", TypeOnly: true}}}}},
+		{"export declare function", "export declare function foo(): void", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo", TypeOnly: true}}}}},
 
 		{"export const", "export const foo = 1", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo"}}}}},
 		{"export let", "export let foo = 1", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo"}}}}},
@@ -216,6 +240,7 @@ func TestScannerErrors(t *testing.T) {
 		{"unterminated string", "import foo from 'mod"},
 		{"unterminated dynamic import string", "import('mod"},
 		{"namespace import missing identifier after as", "import * as from 'mod'"},
+		{"unterminated named brace", "import { foo"},
 
 		{"export missing from after star", "export * 'mod'"},
 		{"export star as missing identifier", "export * as from 'mod'"},
@@ -245,15 +270,25 @@ func TestScannerMultipleImports(t *testing.T) {
 		"import type { D, E } from 'types'\n" +
 		"import type Def, { Mixed } from 'mixed'\n" +
 		"\n" +
+		"export const localConst = 1\n" +
+		"export function helper() {}\n" +
+		"export default function main() {}\n" +
+		"export { foo as bar } from './default'\n" +
+		"export * from './all'\n" +
+		"export type { Foo } from './types'\n" +
+		"\n" +
 		"const msg = `template ${import('dynamic')} ${`nested ${1}`} end`\n" +
 		"const s1 = \"import fake from 'nope'\"\n" +
 		"const s2 = 'import fake from \"nope\"'\n" +
+		"const s3 = \"export { fake } from 'nope'\"\n" +
 		"/* import fake from 'nope' */\n" +
+		"/* export { fake } from 'nope' */\n" +
 		"obj.import('not-an-import')\n" +
 		"\n" +
-		"import { last1, last2, } from 'trailing'\n"
+		"import { last1, last2, } from 'trailing'\n" +
+		"export { localConst, helper }\n"
 
-	expected := []Import{
+	expectedImports := []Import{
 		{From: "side-effect"},
 		{From: "./default", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo"}}},
 		{From: "namespace", Symbols: []Symbol{{Kind: NamespaceSymbol, Name: "ns"}}},
@@ -270,6 +305,9 @@ func TestScannerMultipleImports(t *testing.T) {
 			{Kind: DefaultSymbol, Name: "Def", TypeOnly: true},
 			{Kind: NamedSymbol, Name: "Mixed", TypeOnly: true},
 		}},
+		{From: "./default", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo", Alias: "bar"}}},
+		{From: "./all"},
+		{From: "./types", Symbols: []Symbol{{Kind: NamedSymbol, Name: "Foo", TypeOnly: true}}},
 		{From: "dynamic", Dynamic: true},
 		{From: "trailing", Symbols: []Symbol{
 			{Kind: NamedSymbol, Name: "last1"},
@@ -277,19 +315,40 @@ func TestScannerMultipleImports(t *testing.T) {
 		}},
 	}
 
+	expectedExports := []Export{
+		{Symbols: []Symbol{{Kind: NamedSymbol, Name: "localConst"}}},
+		{Symbols: []Symbol{{Kind: NamedSymbol, Name: "helper"}}},
+		{Symbols: []Symbol{{Kind: DefaultSymbol}}},
+		{From: "./default", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo", Alias: "bar"}}},
+		{From: "./all"},
+		{From: "./types", Symbols: []Symbol{{Kind: NamedSymbol, Name: "Foo", TypeOnly: true}}},
+		{Symbols: []Symbol{
+			{Kind: NamedSymbol, Name: "localConst"},
+			{Kind: NamedSymbol, Name: "helper"},
+		}},
+	}
+
 	scanner := &scanner{src: []byte(src)}
-	imports, _, err := scanner.scan()
+	imports, exports, err := scanner.scan()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(imports) != len(expected) {
-		t.Fatalf("expected %d imports, got %d: %+v", len(expected), len(imports), imports)
+	if len(imports) != len(expectedImports) {
+		t.Fatalf("expected %d imports, got %d: %+v", len(expectedImports), len(imports), imports)
 	}
-
-	for i, want := range expected {
+	for i, want := range expectedImports {
 		if !reflect.DeepEqual(imports[i], want) {
 			t.Errorf("import %d:\n  expected %+v\n  got      %+v", i, want, imports[i])
+		}
+	}
+
+	if len(exports) != len(expectedExports) {
+		t.Fatalf("expected %d exports, got %d: %+v", len(expectedExports), len(exports), exports)
+	}
+	for i, want := range expectedExports {
+		if !reflect.DeepEqual(exports[i], want) {
+			t.Errorf("export %d:\n  expected %+v\n  got      %+v", i, want, exports[i])
 		}
 	}
 }

@@ -300,68 +300,51 @@ func (s *scanner) parseExport() error {
 		s.imports = append(s.imports, Import{From: from, Symbols: exp.Symbols})
 
 	default:
-		word, err := s.nextWord()
-		if err != nil {
-			return err
+	outer:
+		for {
+			word, err := s.nextWord()
+			if err != nil {
+				return err
+			}
+
+			s.skipSpace()
+
+			switch word {
+			case "default":
+				exp.Symbols = append(exp.Symbols, Symbol{})
+				s.exports = append(s.exports, exp)
+				return nil
+
+			case "declare":
+				onlyTypes = true
+
+			case "async", "abstract":
+
+			case "const", "let", "var", "function", "class", "enum":
+				break outer
+
+			case "interface":
+				onlyTypes = true
+				break outer
+
+			default:
+				if onlyTypes {
+					exp.Symbols = append(exp.Symbols, Symbol{Name: word, Kind: NamedSymbol, TypeOnly: true})
+					s.exports = append(s.exports, exp)
+					return nil
+				} else {
+					return fmt.Errorf("unexpected token %q", s.peek())
+				}
+			}
 		}
 
 		s.skipSpace()
-
-		switch word {
-		case "default":
-			word, err := s.nextWord()
-			if err != nil {
-				return err
-			}
-			if word == "function" || word == "class" {
-				s.skipSpace()
-				word, err = s.nextWord()
-				if err != nil {
-					return err
-				}
-			}
-			exp.Symbols = append(exp.Symbols, Symbol{Name: word})
-
-		case "const", "let", "var", "function", "class", "enum":
-			symbol, err := s.symbolFromNextWord(onlyTypes)
-			if err != nil {
-				return err
-			}
-			symbol.Kind = NamedSymbol
-			exp.Symbols = append(exp.Symbols, symbol)
-
-		case "async":
-			s.skipSpace()
-			word, err := s.nextWord()
-			if err != nil {
-				return err
-			}
-			if word != "function" {
-				return fmt.Errorf("expected 'function' after 'async', got %s", word)
-			}
-			s.skipSpace()
-			symbol, err := s.symbolFromNextWord(onlyTypes)
-			if err != nil {
-				return err
-			}
-			symbol.Kind = NamedSymbol
-			exp.Symbols = append(exp.Symbols, symbol)
-
-		case "interface":
-			symbol, err := s.symbolFromNextWord(true)
-			if err != nil {
-				return err
-			}
-			symbol.Kind = NamedSymbol
-			exp.Symbols = append(exp.Symbols, symbol)
-
-		default:
-			if onlyTypes {
-				exp.Symbols = append(exp.Symbols, Symbol{Name: word, Kind: NamedSymbol, TypeOnly: true})
-			} else {
-				return fmt.Errorf("unexpected token %q", s.peek())
-			}
+		symbol, err := s.symbolFromNextWord(onlyTypes)
+		if err != nil {
+			return err
 		}
+		symbol.Kind = NamedSymbol
+		exp.Symbols = append(exp.Symbols, symbol)
 	}
 
 	s.exports = append(s.exports, exp)
@@ -418,11 +401,11 @@ func (s *scanner) isWord(word []byte) bool {
 	}
 	if s.i > 0 {
 		prev := s.peekAt(-1)
-		if isLetter(prev) || prev == '.' {
+		if isIdent(prev) || prev == '.' {
 			return false
 		}
 	}
-	if s.i+len(word) < len(s.src) && isLetter(s.peekAt(len(word))) {
+	if s.i+len(word) < len(s.src) && isIdent(s.peekAt(len(word))) {
 		return false
 	}
 	s.i += len(word)
@@ -431,7 +414,7 @@ func (s *scanner) isWord(word []byte) bool {
 
 func (s *scanner) nextWord() (string, error) {
 	pos := s.i
-	for isLetter(s.peek()) {
+	for isIdent(s.peek()) {
 		s.i++
 	}
 	if pos == s.i {
@@ -467,8 +450,8 @@ func (s *scanner) readString() (string, error) {
 	return string(s.src[start:s.i]), nil
 }
 
-func isLetter(char byte) bool {
-	return 'a' <= char && char <= 'z' || 'A' <= char && char <= 'Z' || '0' <= char && char <= '9' || char == '_'
+func isIdent(char byte) bool {
+	return 'a' <= char && char <= 'z' || 'A' <= char && char <= 'Z' || '0' <= char && char <= '9' || char == '_' || char == '$'
 }
 
 func (s *scanner) symbolFromNextWord(onlyTypes bool) (Symbol, error) {
