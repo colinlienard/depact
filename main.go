@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	_ = parser.Parse([]byte("import x from 'mod'"))
+	_, _ = parser.Parse([]byte("import x from 'mod'"))
 }

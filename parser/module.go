@@ -3,9 +3,9 @@ package parser
 type SymbolKind int
 
 const (
-	DefaultSym SymbolKind = iota
-	NamedSym
-	NamespaceSym
+	DefaultSymbol SymbolKind = iota
+	NamedSymbol
+	NamespaceSymbol
 )
 
 type Symbol struct {
@@ -22,6 +22,7 @@ type Import struct {
 }
 
 type Export struct {
+	From    string
 	Symbols []Symbol
 }
 
