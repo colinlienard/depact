@@ -190,12 +190,12 @@ func (s *scanner) parseImport() error {
 
 	default:
 		if s.peek() != '{' && s.peek() != '*' {
-			sym, err := s.symbolFromNextWord(onlyTypes)
+			symbol, err := s.symbolFromNextWord(onlyTypes)
 			if err != nil {
 				return err
 			}
-			sym.Kind = DefaultSym
-			imp.Symbols = append(imp.Symbols, sym)
+			symbol.Kind = DefaultSymbol
+			imp.Symbols = append(imp.Symbols, symbol)
 			s.skipSpace()
 			if s.peek() == ',' {
 				s.i++
@@ -210,12 +210,12 @@ func (s *scanner) parseImport() error {
 				return fmt.Errorf("expected 'as' after '*' in namespace import")
 			}
 			s.skipSpace()
-			sym, err := s.symbolFromNextWord(onlyTypes)
+			symbol, err := s.symbolFromNextWord(onlyTypes)
 			if err != nil {
 				return err
 			}
-			sym.Kind = NamespaceSym
-			imp.Symbols = append(imp.Symbols, sym)
+			symbol.Kind = NamespaceSymbol
+			imp.Symbols = append(imp.Symbols, symbol)
 		} else if s.peek() == '{' {
 			symbols, err := s.parseNamed(onlyTypes)
 			if err != nil {
@@ -281,12 +281,12 @@ func (s *scanner) parseExport() error {
 		s.skipSpace()
 		if isAs := s.isWord(asKeyword); isAs {
 			s.skipSpace()
-			sym, err := s.symbolFromNextWord(onlyTypes)
+			symbol, err := s.symbolFromNextWord(onlyTypes)
 			if err != nil {
 				return err
 			}
-			sym.Kind = NamespaceSym
-			exp.Symbols = append(exp.Symbols, sym)
+			symbol.Kind = NamespaceSymbol
+			exp.Symbols = append(exp.Symbols, symbol)
 		}
 		if isFrom := s.isWord(fromKeyword); !isFrom {
 			return fmt.Errorf("expected 'from' after import symbols")
@@ -298,6 +298,70 @@ func (s *scanner) parseExport() error {
 		}
 		exp.From = from
 		s.imports = append(s.imports, Import{From: from, Symbols: exp.Symbols})
+
+	default:
+		word, err := s.nextWord()
+		if err != nil {
+			return err
+		}
+
+		s.skipSpace()
+
+		switch word {
+		case "default":
+			word, err := s.nextWord()
+			if err != nil {
+				return err
+			}
+			if word == "function" || word == "class" {
+				s.skipSpace()
+				word, err = s.nextWord()
+				if err != nil {
+					return err
+				}
+			}
+			exp.Symbols = append(exp.Symbols, Symbol{Name: word})
+
+		case "const", "let", "var", "function", "class", "enum":
+			symbol, err := s.symbolFromNextWord(onlyTypes)
+			if err != nil {
+				return err
+			}
+			symbol.Kind = NamedSymbol
+			exp.Symbols = append(exp.Symbols, symbol)
+
+		case "async":
+			s.skipSpace()
+			word, err := s.nextWord()
+			if err != nil {
+				return err
+			}
+			if word != "function" {
+				return fmt.Errorf("expected 'function' after 'async', got %s", word)
+			}
+			s.skipSpace()
+			symbol, err := s.symbolFromNextWord(onlyTypes)
+			if err != nil {
+				return err
+			}
+			symbol.Kind = NamedSymbol
+			exp.Symbols = append(exp.Symbols, symbol)
+
+		case "interface":
+			symbol, err := s.symbolFromNextWord(true)
+			if err != nil {
+				return err
+			}
+			symbol.Kind = NamedSymbol
+			exp.Symbols = append(exp.Symbols, symbol)
+
+		default:
+			if onlyTypes {
+				exp.Symbols = append(exp.Symbols, Symbol{Name: word, Kind: NamedSymbol, TypeOnly: true})
+			} else {
+				return fmt.Errorf("unexpected token %q", s.peek())
+			}
+		}
 	}
 
 	s.exports = append(s.exports, exp)
@@ -318,12 +382,12 @@ func (s *scanner) parseNamed(onlyTypes bool) ([]Symbol, error) {
 			s.i++
 			continue
 		}
-		sym, err := s.symbolFromNextWord(onlyTypes)
+		symbol, err := s.symbolFromNextWord(onlyTypes)
 		if err != nil {
 			return nil, err
 		}
-		sym.Kind = NamedSym
-		symbols = append(symbols, sym)
+		symbol.Kind = NamedSymbol
+		symbols = append(symbols, symbol)
 	}
 	return symbols, nil
 }
