@@ -1,4 +1,4 @@
-package resolver
+package walker
 
 import "depact/parser"
 

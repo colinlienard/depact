@@ -1,1 +1,79 @@
 package resolver
+
+import (
+	"io/fs"
+	"path"
+	"strings"
+)
+
+type Resolver struct {
+	fs    fs.FS
+	root  string
+	paths map[string][]string // tsconfig paths
+	cache map[string]Resolved
+}
+
+type ResolveKind int
+
+const (
+	ResolveKindFile ResolveKind = iota
+	ResolveKindIndex
+	ResolveKindPackage
+	ResolveKindBuiltin
+	ResolveKindUnresolved
+)
+
+type Resolved struct {
+	Path     string
+	External bool
+	Kind     ResolveKind
+}
+
+func New(fsys fs.FS, paths map[string][]string) *Resolver {
+	return &Resolver{
+		fs:    fsys,
+		paths: paths,
+		cache: map[string]Resolved{},
+	}
+}
+
+func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
+	if strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../") {
+		p := path.Join(path.Dir(from), specifier)
+
+		if stat, err := fs.Stat(r.fs, p); err == nil {
+			if stat.IsDir() {
+				indexPath, found := r.find(path.Join(p, "index"))
+				if !found {
+					return Resolved{Kind: ResolveKindUnresolved}, nil
+				}
+				return Resolved{Path: indexPath}, nil
+			}
+			return Resolved{Path: p}, nil
+		}
+
+		p, found := r.find(p)
+		if !found {
+			return Resolved{Kind: ResolveKindUnresolved}, nil
+		}
+		return Resolved{Path: p}, nil
+	}
+
+	return Resolved{}, nil
+}
+
+var extensions = []string{".ts", ".tsx", ".js", ".jsx"}
+
+func (r *Resolver) find(name string) (string, bool) {
+	for _, ext := range extensions {
+		if r.exists(name + ext) {
+			return name + ext, true
+		}
+	}
+	return "", false
+}
+
+func (r *Resolver) exists(name string) bool {
+	_, err := fs.Stat(r.fs, name)
+	return err == nil
+}
