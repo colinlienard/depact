@@ -6,7 +6,13 @@ import (
 	"testing/fstest"
 )
 
-// TODO: handle .js that references .ts (support passing tsconfig options, not only paths)
+// TODO:
+// handle .js that references .ts (support passing tsconfig options, not only paths)
+// Subpath patterns with `*`**: `"./utils/*": "./src/utils/*.js"`. Pattern matching that needs prefix/suffix logic.
+// Scoped packages (`@scope/name`): `splitSpecifier` needs to know `@x/y` is the package and `@x/y/z` is package `@x/y` with subpath `./z`.
+// Array fallbacks: `"exports": { ".": ["./a.js", "./b.js"] }` — try in order.
+// `null` values: explicitly blocking a subpath.
+// `imports` field (the `#`-prefixed in-package imports).
 
 func TestResolverWithoutPaths(t *testing.T) {
 	tests := []struct {
@@ -18,12 +24,12 @@ func TestResolverWithoutPaths(t *testing.T) {
 		{"with js extension", "./mod.js", Resolved{Path: "src/mod.js"}},
 		{"with tsx extension", "./mod.tsx", Resolved{Path: "src/mod.tsx"}},
 		{"without extension", "./mod", Resolved{Path: "src/mod.ts"}},
-		{"barrel", "./barrel", Resolved{Path: "src/barrel/index.ts"}},
+		{"barrel", "./barrel", Resolved{Path: "src/barrel/index.ts", Kind: ResolveKindIndex}},
 		{"deep", "./multiple/parts/mod.ts", Resolved{Path: "src/multiple/parts/mod.ts"}},
 		{"one level up", "../out.ts", Resolved{Path: "out.ts"}},
-		// {"dependency with main export", "lodash", Resolved{Path: "node_modules/lodash/dist/index.js"}},
-		// {"dependency with exports", "react", Resolved{Path: "node_modules/react/dist/index.js"}},
-		// {"dependency with sub-path-export", "react/sub", Resolved{Path: "node_modules/react/dist/sub/index.js"}},
+		{"dependency with main export", "lodash", Resolved{Path: "node_modules/lodash/dist/index.js", Kind: ResolveKindPackage}},
+		// {"dependency with exports", "react", Resolved{Path: "node_modules/react/dist/index.js", Kind: ResolveKindPackage}},
+		// {"dependency with sub-path-export", "react/sub", Resolved{Path: "node_modules/react/dist/sub/index.js", Kind: ResolveKindPackage}},
 		// {"node builtin", "fs", Resolved{Kind: ResolveKindBuiltin}},
 		// {"node builtin with prefix", "node:fs", Resolved{Kind: ResolveKindBuiltin}},
 		// {"bun builtin with prefix", "bun:sqlite", Resolved{Kind: ResolveKindBuiltin}},
