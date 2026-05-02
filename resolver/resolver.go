@@ -60,17 +60,19 @@ func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
 		return Resolved{Path: p}, nil
 	}
 
+	if isBuiltin(specifier) {
+		return Resolved{Kind: ResolveKindBuiltin}, nil
+	}
+
 	p, err := r.resolvePkgEntry(specifier)
 	switch {
 	case err == nil:
-		return Resolved{Path: p, Kind: ResolveKindPackage}, nil
+		return Resolved{Path: p, Kind: ResolveKindPackage, External: true}, nil
 	case errors.Is(err, ErrPkgNotFound):
 	case errors.Is(err, ErrPkgNoEntries):
 	default:
 		return Resolved{}, err
 	}
-
-	// TODO: handle builtins
 
 	return Resolved{Kind: ResolveKindUnresolved}, nil
 }
