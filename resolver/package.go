@@ -11,6 +11,7 @@ import (
 type PkgJSON struct {
 	Main    string          `json:"main"`
 	Exports json.RawMessage `json:"exports"`
+	Imports json.RawMessage `json:"imports"`
 }
 
 var ErrPkgNotFound = errors.New("resolver: package not found")
@@ -99,6 +100,61 @@ func (r *Resolver) resolvePkgExports(exports json.RawMessage, subpath string) (s
 		return "", ErrPkgNotFound
 	}
 	return r.resolveConditions(exports)
+}
+
+func (r *Resolver) resolvePkgImports(from, specifier string) (string, error) {
+	pkgDir, pkg, err := r.findEnclosingPkg(from)
+	if err != nil {
+		return "", err
+	}
+	if len(pkg.Imports) == 0 {
+		return "", ErrPkgNotFound
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(pkg.Imports, &obj); err != nil {
+		return "", err
+	}
+
+	if entry, ok := obj[specifier]; ok {
+		target, err := r.resolveConditions(entry)
+		if err != nil {
+			return "", err
+		}
+		return path.Join(pkgDir, target), nil
+	}
+
+	if entry, match, ok := matchPattern(obj, specifier); ok {
+		target, err := r.resolveConditions(entry)
+		if err != nil {
+			return "", err
+		}
+		return path.Join(pkgDir, strings.Replace(target, "*", match, 1)), nil
+	}
+
+	return "", ErrPkgNotFound
+}
+
+func (r *Resolver) findEnclosingPkg(from string) (string, *PkgJSON, error) {
+	dir := path.Dir(from)
+	for {
+		p := path.Join(dir, "package.json")
+		if r.exists(p) {
+			content, err := fs.ReadFile(r.fs, p)
+			if err != nil {
+				return "", nil, err
+			}
+			var pkg PkgJSON
+			if err := json.Unmarshal(content, &pkg); err != nil {
+				return "", nil, err
+			}
+			return dir, &pkg, nil
+		}
+		if dir == "." || dir == "/" {
+			return "", nil, ErrPkgNotFound
+		}
+		dir = path.Dir(dir)
+	}
 }
 
 func matchPattern(obj map[string]json.RawMessage, key string) (json.RawMessage, string, bool) {

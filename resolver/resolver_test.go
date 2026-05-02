@@ -6,10 +6,6 @@ import (
 	"testing/fstest"
 )
 
-// TODO:
-// handle .js that references .ts (support passing tsconfig options, not only paths)
-// `imports` field (the `#`-prefixed in-package imports).
-
 func TestResolverWithoutPaths(t *testing.T) {
 	tests := []struct {
 		name      string

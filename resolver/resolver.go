@@ -60,6 +60,18 @@ func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
 		return Resolved{Path: p}, nil
 	}
 
+	if strings.HasPrefix(specifier, "#") {
+		p, err := r.resolvePkgImports(from, specifier)
+		switch {
+		case err == nil:
+			return Resolved{Path: p, Kind: ResolveKindFile}, nil
+		case errors.Is(err, ErrPkgNotFound):
+			return Resolved{Kind: ResolveKindUnresolved}, nil
+		default:
+			return Resolved{}, err
+		}
+	}
+
 	if isBuiltin(specifier) {
 		return Resolved{Kind: ResolveKindBuiltin}, nil
 	}

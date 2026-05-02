@@ -1,4 +1,3 @@
-1. **Resolve a specifier to an absolute path** — handle relative paths, `tsconfig` `paths` aliases, `package.json` `exports`/`main`/`types`, index files, and TS extension guessing (`.ts`/`.tsx`/`.d.ts`/`.js`). Classify each result as internal vs external (node_modules) so `--follow-externals` can gate traversal.
-2. **Cache by canonical path** — same file reached via two specifiers must be one node, otherwise the graph double-counts.
-3. **Walk from an entrypoint** — BFS/DFS, calling the parser on each newly-resolved module, deduping via the cache. Parallelize since parsing is independent per file.
-4. **Produce a `Graph`** — nodes = modules (with their parsed `Imports`/`Exports`), edges = resolved import relationships, ideally carrying the *symbols* used on each edge (not just "A imports B") since that's what later analyses need.
+- [ ] tsconfig paths
+- [ ] tsconfig compiler options (.js that references .ts)
+- [ ] cache

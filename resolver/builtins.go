@@ -61,9 +61,22 @@ var nodeBuiltins = map[string]struct{}{
 	"zlib":                {},
 }
 
+var externalSchemes = []string{
+	"node:",
+	"bun:",
+	"jsr:",
+	"npm:",
+	"https://",
+	"http://",
+	"file://",
+	"data:",
+}
+
 func isBuiltin(specifier string) bool {
-	if strings.HasPrefix(specifier, "node:") || strings.HasPrefix(specifier, "bun:") {
-		return true
+	for _, s := range externalSchemes {
+		if strings.HasPrefix(specifier, s) {
+			return true
+		}
 	}
 	_, ok := nodeBuiltins[specifier]
 	return ok
