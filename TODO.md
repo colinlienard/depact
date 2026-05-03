@@ -1,0 +1,3 @@
+- [ ] tsconfig paths
+- [ ] tsconfig compiler options (.js that references .ts)
+- [ ] cache (mutex)
