@@ -9,7 +9,6 @@ import (
 
 type Resolver struct {
 	fs    fs.FS
-	root  string
 	paths map[string][]string // tsconfig paths
 	cache map[string]Resolved
 }
@@ -21,6 +20,7 @@ const (
 	ResolveKindIndex
 	ResolveKindPackage
 	ResolveKindBuiltin
+	ResolveKindExternal
 	ResolveKindUnresolved
 )
 
@@ -76,20 +76,22 @@ func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
 		return Resolved{Kind: ResolveKindBuiltin}, nil
 	}
 
+	if isExternalScheme(specifier) {
+		return Resolved{Kind: ResolveKindExternal, External: true}, nil
+	}
+
 	p, err := r.resolvePkgEntry(specifier)
-	switch {
-	case err == nil:
+	if err == nil {
 		return Resolved{Path: p, Kind: ResolveKindPackage, External: true}, nil
-	case errors.Is(err, ErrPkgNotFound):
-	case errors.Is(err, ErrPkgNoEntries):
-	default:
+	}
+	if !errors.Is(err, ErrPkgNotFound) && !errors.Is(err, ErrPkgNoEntries) {
 		return Resolved{}, err
 	}
 
 	return Resolved{Kind: ResolveKindUnresolved}, nil
 }
 
-var extensions = []string{".ts", ".tsx", ".js", ".jsx"}
+var extensions = []string{".ts", ".tsx", ".d.ts", ".js", ".jsx"}
 
 func (r *Resolver) find(name string) (string, bool) {
 	for _, ext := range extensions {

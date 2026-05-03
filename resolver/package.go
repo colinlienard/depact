@@ -18,6 +18,10 @@ var ErrPkgNotFound = errors.New("resolver: package not found")
 var ErrPkgNoEntries = errors.New("resolver: found no entries in package")
 
 func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
+	if specifier == "" {
+		return "", ErrPkgNotFound
+	}
+
 	subpath := ""
 	numberOfSlash := strings.Count(specifier, "/")
 	isScopedPkg := specifier[0] == '@'
@@ -31,13 +35,11 @@ func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
 
 	pkgPath := path.Join("node_modules", specifier, "package.json")
 
-	_, err := r.stat(pkgPath)
-	if err != nil {
-		return "", ErrPkgNotFound
-	}
-
 	content, err := fs.ReadFile(r.fs, pkgPath)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", ErrPkgNotFound
+		}
 		return "", err
 	}
 

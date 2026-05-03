@@ -61,9 +61,12 @@ var nodeBuiltins = map[string]struct{}{
 	"zlib":                {},
 }
 
-var externalSchemes = []string{
+var builtinSchemes = []string{
 	"node:",
 	"bun:",
+}
+
+var externalSchemes = []string{
 	"jsr:",
 	"npm:",
 	"https://",
@@ -73,11 +76,20 @@ var externalSchemes = []string{
 }
 
 func isBuiltin(specifier string) bool {
-	for _, s := range externalSchemes {
+	for _, s := range builtinSchemes {
 		if strings.HasPrefix(specifier, s) {
 			return true
 		}
 	}
 	_, ok := nodeBuiltins[specifier]
 	return ok
+}
+
+func isExternalScheme(specifier string) bool {
+	for _, s := range externalSchemes {
+		if strings.HasPrefix(specifier, s) {
+			return true
+		}
+	}
+	return false
 }
