@@ -1,3 +1,5 @@
-- [ ] tsconfig paths
-- [ ] tsconfig compiler options (.js that references .ts)
+- [ ] tsconfig paths, baseUrl
+- [ ] tsconfig moduleResolution, allowImportingTsExtensions
+- [ ] tsconfig extends
+- [ ] tsconfig references
 - [ ] cache (mutex)

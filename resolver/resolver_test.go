@@ -209,3 +209,6 @@ func TestResolverWithoutPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestResolverWithPaths(t *testing.T) {
+}
