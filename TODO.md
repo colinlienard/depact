@@ -1,5 +1,0 @@
-- [ ] tsconfig paths, baseUrl
-- [ ] tsconfig moduleResolution, allowImportingTsExtensions
-- [ ] tsconfig extends
-- [ ] tsconfig references
-- [ ] cache (mutex)

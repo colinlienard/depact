@@ -17,9 +17,9 @@ func TestResolvePkgImports(t *testing.T) {
 		{
 			name: "imports exact key with string value",
 			fsys: fstest.MapFS{
-				"package.json":      {Data: []byte(`{"imports":{"#utils":"./src/utils.js"}}`)},
-				"src/entry.ts":      {},
-				"src/utils.js":      {},
+				"package.json": {Data: []byte(`{"imports":{"#utils":"./src/utils.js"}}`)},
+				"src/entry.ts": {},
+				"src/utils.js": {},
 			},
 			from:      "src/entry.ts",
 			specifier: "#utils",
@@ -39,9 +39,9 @@ func TestResolvePkgImports(t *testing.T) {
 		{
 			name: "imports with wildcard pattern",
 			fsys: fstest.MapFS{
-				"package.json":          {Data: []byte(`{"imports":{"#util/*":"./src/util/*.js"}}`)},
-				"src/entry.ts":          {},
-				"src/util/format.js":    {},
+				"package.json":       {Data: []byte(`{"imports":{"#util/*":"./src/util/*.js"}}`)},
+				"src/entry.ts":       {},
+				"src/util/format.js": {},
 			},
 			from:      "src/entry.ts",
 			specifier: "#util/format",
@@ -70,9 +70,9 @@ func TestResolvePkgImports(t *testing.T) {
 		{
 			name: "imports walks up to enclosing package.json",
 			fsys: fstest.MapFS{
-				"package.json":          {Data: []byte(`{"imports":{"#utils":"./src/utils.js"}}`)},
-				"src/deep/nested/x.ts":  {},
-				"src/utils.js":          {},
+				"package.json":         {Data: []byte(`{"imports":{"#utils":"./src/utils.js"}}`)},
+				"src/deep/nested/x.ts": {},
+				"src/utils.js":         {},
 			},
 			from:      "src/deep/nested/x.ts",
 			specifier: "#utils",

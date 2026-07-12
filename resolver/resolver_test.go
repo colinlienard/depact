@@ -2,6 +2,7 @@ package resolver
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 	"testing/fstest"
 )
@@ -211,4 +212,161 @@ func TestResolverWithoutPaths(t *testing.T) {
 }
 
 func TestResolverWithPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		fsys      fstest.MapFS
+		paths     map[string][]string
+		from      string
+		specifier string
+		expected  Resolved
+	}{
+		{
+			name: "wildcard mapping",
+			fsys: fstest.MapFS{
+				"src/entry.ts": {},
+				"src/mod.ts":   {},
+			},
+			paths:     map[string][]string{"@/*": {"src/*"}},
+			from:      "src/entry.ts",
+			specifier: "@/mod",
+			expected:  Resolved{Path: "src/mod.ts"},
+		},
+		{
+			name: "exact mapping",
+			fsys: fstest.MapFS{
+				"src/entry.ts":       {},
+				"src/lib/index.ts":   {},
+				"src/lib/helpers.ts": {},
+			},
+			paths:     map[string][]string{"~lib": {"src/lib/index.ts"}},
+			from:      "src/entry.ts",
+			specifier: "~lib",
+			expected:  Resolved{Path: "src/lib/index.ts"},
+		},
+		{
+			name: "wildcard resolves to barrel directory",
+			fsys: fstest.MapFS{
+				"src/entry.ts":              {},
+				"src/components/index.ts":   {},
+				"src/components/button.tsx": {},
+			},
+			paths:     map[string][]string{"@/*": {"src/*"}},
+			from:      "src/entry.ts",
+			specifier: "@/components",
+			expected:  Resolved{Path: "src/components/index.ts", Kind: ResolveKindIndex},
+		},
+		{
+			name: "substitutions tried in order",
+			fsys: fstest.MapFS{
+				"src/entry.ts": {},
+				"src/mod.ts":   {},
+			},
+			paths:     map[string][]string{"@/*": {"generated/*", "src/*"}},
+			from:      "src/entry.ts",
+			specifier: "@/mod",
+			expected:  Resolved{Path: "src/mod.ts"},
+		},
+		{
+			name: "longest matching prefix wins",
+			fsys: fstest.MapFS{
+				"src/entry.ts":    {},
+				"src/ui/thing.ts": {},
+				"design/thing.ts": {},
+			},
+			paths: map[string][]string{
+				"@/*":    {"src/*"},
+				"@/ui/*": {"design/*"},
+			},
+			from:      "src/entry.ts",
+			specifier: "@/ui/thing",
+			expected:  Resolved{Path: "design/thing.ts"},
+		},
+		{
+			name: "exact key preferred over wildcard",
+			fsys: fstest.MapFS{
+				"src/entry.ts":      {},
+				"src/real.ts":       {},
+				"generated/real.ts": {},
+			},
+			paths: map[string][]string{
+				"@/*":    {"generated/*"},
+				"@/real": {"src/real.ts"},
+			},
+			from:      "src/entry.ts",
+			specifier: "@/real",
+			expected:  Resolved{Path: "src/real.ts"},
+		},
+		{
+			name: "non-matching specifier falls through to node_modules",
+			fsys: fstest.MapFS{
+				"src/entry.ts":                      {},
+				"node_modules/lodash/package.json":  {Data: []byte(`{"main":"./dist/index.js"}`)},
+				"node_modules/lodash/dist/index.js": {},
+			},
+			paths:     map[string][]string{"@/*": {"src/*"}},
+			from:      "src/entry.ts",
+			specifier: "lodash",
+			expected:  Resolved{Path: "node_modules/lodash/dist/index.js", Kind: ResolveKindPackage, External: true},
+		},
+		{
+			name: "matching pattern with missing target is unresolved",
+			fsys: fstest.MapFS{
+				"src/entry.ts": {},
+			},
+			paths:     map[string][]string{"@/*": {"src/*"}},
+			from:      "src/entry.ts",
+			specifier: "@/missing",
+			expected:  Resolved{Kind: ResolveKindUnresolved},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New(tt.fsys, tt.paths)
+			got, err := r.Resolve(tt.from, tt.specifier)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("expected %+v, got %+v", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestResolverCache(t *testing.T) {
+	fsys := fstest.MapFS{
+		"src/entry.ts": {},
+		"src/mod.ts":   {},
+	}
+	r := New(fsys, nil)
+
+	first, err := r.Resolve("src/entry.ts", "./mod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expected := Resolved{Path: "src/mod.ts"}
+	if !reflect.DeepEqual(first, expected) {
+		t.Fatalf("expected %+v, got %+v", expected, first)
+	}
+	if _, ok := r.cache["src/entry.ts\x00./mod"]; !ok {
+		t.Fatalf("expected result to be cached")
+	}
+
+	// Concurrent resolves must be race-free and consistent.
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := r.Resolve("src/entry.ts", "./mod")
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, expected) {
+				t.Errorf("expected %+v, got %+v", expected, got)
+			}
+		}()
+	}
+	wg.Wait()
 }

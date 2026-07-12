@@ -5,11 +5,13 @@ import (
 	"io/fs"
 	"path"
 	"strings"
+	"sync"
 )
 
 type Resolver struct {
 	fs    fs.FS
 	paths map[string][]string // tsconfig paths
+	mu    sync.Mutex
 	cache map[string]Resolved
 }
 
@@ -39,25 +41,38 @@ func New(fsys fs.FS, paths map[string][]string) *Resolver {
 }
 
 func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
+	key := from + "\x00" + specifier
+
+	r.mu.Lock()
+	if res, ok := r.cache[key]; ok {
+		r.mu.Unlock()
+		return res, nil
+	}
+	r.mu.Unlock()
+
+	res, err := r.resolve(from, specifier)
+	if err != nil {
+		return res, err
+	}
+
+	r.mu.Lock()
+	r.cache[key] = res
+	r.mu.Unlock()
+
+	return res, nil
+}
+
+func (r *Resolver) resolve(from, specifier string) (Resolved, error) {
 	if strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../") {
 		p := path.Join(path.Dir(from), specifier)
-
-		if stat, err := r.stat(p); err == nil {
-			if stat.IsDir() {
-				indexPath, found := r.find(path.Join(p, "index"))
-				if !found {
-					return Resolved{Kind: ResolveKindUnresolved}, nil
-				}
-				return Resolved{Path: indexPath, Kind: ResolveKindIndex}, nil
-			}
-			return Resolved{Path: p}, nil
+		if res, ok := r.resolveFile(p); ok {
+			return res, nil
 		}
+		return Resolved{Kind: ResolveKindUnresolved}, nil
+	}
 
-		p, found := r.find(p)
-		if !found {
-			return Resolved{Kind: ResolveKindUnresolved}, nil
-		}
-		return Resolved{Path: p}, nil
+	if res, ok := r.resolvePaths(specifier); ok {
+		return res, nil
 	}
 
 	if strings.HasPrefix(specifier, "#") {
@@ -89,6 +104,68 @@ func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
 	}
 
 	return Resolved{Kind: ResolveKindUnresolved}, nil
+}
+
+func (r *Resolver) resolveFile(p string) (Resolved, bool) {
+	if stat, err := r.stat(p); err == nil {
+		if stat.IsDir() {
+			indexPath, found := r.find(path.Join(p, "index"))
+			if !found {
+				return Resolved{}, false
+			}
+			return Resolved{Path: indexPath, Kind: ResolveKindIndex}, true
+		}
+		return Resolved{Path: p}, true
+	}
+	if name, found := r.find(p); found {
+		return Resolved{Path: name}, true
+	}
+	return Resolved{}, false
+}
+
+func (r *Resolver) resolvePaths(specifier string) (Resolved, bool) {
+	subs, match, ok := matchPaths(r.paths, specifier)
+	if !ok {
+		return Resolved{}, false
+	}
+	for _, sub := range subs {
+		candidate := strings.Replace(sub, "*", match, 1)
+		if res, ok := r.resolveFile(candidate); ok {
+			return res, true
+		}
+	}
+	return Resolved{}, false
+}
+
+func matchPaths(paths map[string][]string, specifier string) ([]string, string, bool) {
+	var bestSubs []string
+	var bestMatch string
+	bestPrefix := -1
+	for pattern, subs := range paths {
+		prefix, suffix, wildcard := strings.Cut(pattern, "*")
+		if !wildcard {
+			if pattern == specifier && len(pattern) > bestPrefix {
+				bestSubs, bestMatch, bestPrefix = subs, "", len(pattern)
+			}
+			continue
+		}
+		if len(specifier) < len(prefix)+len(suffix) {
+			continue
+		}
+		if !strings.HasPrefix(specifier, prefix) || !strings.HasSuffix(specifier, suffix) {
+			continue
+		}
+		if len(prefix) <= bestPrefix {
+			continue
+		}
+		bestSubs = subs
+		bestMatch = specifier[len(prefix) : len(specifier)-len(suffix)]
+		bestPrefix = len(prefix)
+	}
+	if bestPrefix < 0 {
+		return nil, "", false
+	}
+	return bestSubs, bestMatch, true
 }
 
 var extensions = []string{".ts", ".tsx", ".d.ts", ".js", ".jsx"}

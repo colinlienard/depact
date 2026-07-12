@@ -138,8 +138,8 @@ func TestResolvePkgEntry(t *testing.T) {
 		{
 			name: "exports wildcard prefers longer prefix",
 			fsys: fstest.MapFS{
-				"node_modules/foo/package.json":     {Data: []byte(`{"exports":{"./*":"./generic/*.js","./utils/*":"./src/utils/*.js"}}`)},
-				"node_modules/foo/src/utils/x.js":   {},
+				"node_modules/foo/package.json":   {Data: []byte(`{"exports":{"./*":"./generic/*.js","./utils/*":"./src/utils/*.js"}}`)},
+				"node_modules/foo/src/utils/x.js": {},
 			},
 			specifier: "foo/utils/x",
 			want:      "node_modules/foo/src/utils/x.js",
@@ -147,8 +147,8 @@ func TestResolvePkgEntry(t *testing.T) {
 		{
 			name: "exports wildcard with deep match",
 			fsys: fstest.MapFS{
-				"node_modules/foo/package.json":         {Data: []byte(`{"exports":{"./utils/*":"./src/utils/*.js"}}`)},
-				"node_modules/foo/src/utils/a/b/c.js":   {},
+				"node_modules/foo/package.json":       {Data: []byte(`{"exports":{"./utils/*":"./src/utils/*.js"}}`)},
+				"node_modules/foo/src/utils/a/b/c.js": {},
 			},
 			specifier: "foo/utils/a/b/c",
 			want:      "node_modules/foo/src/utils/a/b/c.js",
