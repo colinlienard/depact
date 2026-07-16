@@ -32,12 +32,22 @@ func New(fsys fs.FS, r *resolver.Resolver) *Walker {
 	return &Walker{fs: fsys, resolver: r}
 }
 
-func (w *Walker) Walk(entry string) (*Graph, error) {
+func (w *Walker) Walk(entries ...string) (*Graph, error) {
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("walk: no entries")
+	}
 	s := &state{
 		walker: w,
 		graph:  &Graph{Modules: map[string]*Node{}},
 	}
-	s.graph.Entry = s.visit(entry, resolver.Resolved{Path: entry}, true)
+	seen := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		if seen[entry] {
+			continue
+		}
+		seen[entry] = true
+		s.graph.Entries = append(s.graph.Entries, s.visit(entry, resolver.Resolved{Path: entry}, true))
+	}
 	s.wg.Wait()
 	if s.err != nil {
 		return nil, s.err

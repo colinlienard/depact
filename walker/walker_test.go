@@ -8,9 +8,9 @@ import (
 	"depact/resolver"
 )
 
-func walk(t *testing.T, fsys fstest.MapFS, entry string) *Graph {
+func walk(t *testing.T, fsys fstest.MapFS, entries ...string) *Graph {
 	t.Helper()
-	g, err := New(fsys, resolver.New(fsys, nil)).Walk(entry)
+	g, err := New(fsys, resolver.New(fsys, nil)).Walk(entries...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,10 +39,10 @@ func TestWalkChain(t *testing.T) {
 	if len(g.Modules) != 3 {
 		t.Fatalf("expected 3 modules, got %d", len(g.Modules))
 	}
-	if g.Entry.Module.Path != "src/entry.ts" {
-		t.Errorf("expected entry src/entry.ts, got %s", g.Entry.Module.Path)
+	if g.Entries[0].Module.Path != "src/entry.ts" {
+		t.Errorf("expected entry src/entry.ts, got %s", g.Entries[0].Module.Path)
 	}
-	if got := edges(g.Entry); len(got) != 1 || got[0] != "src/a.ts" {
+	if got := edges(g.Entries[0]); len(got) != 1 || got[0] != "src/a.ts" {
 		t.Errorf("expected entry edge to src/a.ts, got %v", got)
 	}
 	if got := edges(g.Modules["src/a.ts"]); len(got) != 1 || got[0] != "src/b.ts" {
@@ -95,7 +95,7 @@ func TestWalkSelfImport(t *testing.T) {
 	if len(g.Modules) != 1 {
 		t.Fatalf("expected 1 module, got %d", len(g.Modules))
 	}
-	if g.Entry.Edges[0].To != g.Entry {
+	if g.Entries[0].Edges[0].To != g.Entries[0] {
 		t.Errorf("expected self edge")
 	}
 }
@@ -112,8 +112,8 @@ func TestWalkFollowsReExports(t *testing.T) {
 		t.Fatalf("expected 4 modules, got %d", len(g.Modules))
 	}
 	barrel := g.Modules["src/ui/index.ts"]
-	if barrel == nil || g.Entry.Edges[0].Kind != resolver.ResolveKindIndex {
-		t.Fatalf("expected barrel index edge, got %+v", g.Entry.Edges[0])
+	if barrel == nil || g.Entries[0].Edges[0].Kind != resolver.ResolveKindIndex {
+		t.Fatalf("expected barrel index edge, got %+v", g.Entries[0].Edges[0])
 	}
 	got := edges(barrel)
 	if len(got) != 2 || got[0] != "src/ui/Button.ts" || got[1] != "src/ui/Card.ts" {
@@ -160,7 +160,7 @@ func TestWalkLeafKinds(t *testing.T) {
 			t.Errorf("expected node for %s", tt.key)
 			continue
 		}
-		e := g.Entry.Edges[i]
+		e := g.Entries[0].Edges[i]
 		if e.To != n || e.Kind != tt.kind || n.External != tt.external || len(n.Edges) != 0 {
 			t.Errorf("%s: expected kind=%v external=%v leaf, got edge %+v node %+v", tt.key, tt.kind, tt.external, e, n)
 		}
@@ -237,7 +237,7 @@ func TestWalkEdgeKeepsImport(t *testing.T) {
 		"src/t.ts":     file(`export type T = string`),
 	}, "src/entry.ts")
 
-	e := g.Entry.Edges[0]
+	e := g.Entries[0].Edges[0]
 	if e.Import.From != "./t" || !e.Import.TypeOnly() {
 		t.Errorf("expected type-only import edge for ./t, got %+v", e.Import)
 	}
@@ -255,11 +255,45 @@ func TestWalkSkipTypeOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := edges(g.Entry); len(got) != 1 || got[0] != "src/v.ts" {
+	if got := edges(g.Entries[0]); len(got) != 1 || got[0] != "src/v.ts" {
 		t.Errorf("expected only value edge to src/v.ts, got %v", got)
 	}
 	if g.Modules["src/t.ts"] != nil {
 		t.Errorf("expected type-only module to be absent")
+	}
+}
+
+func TestWalkMultiEntry(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/a.test.ts": file(`import { s } from './shared'`),
+		"src/b.test.ts": file(`import { s } from './shared'`),
+		"src/shared.ts": file(`export const s = 1`),
+	}, "src/a.test.ts", "src/b.test.ts")
+
+	if len(g.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(g.Entries))
+	}
+	if len(g.Modules) != 3 {
+		t.Fatalf("expected 3 modules, got %d", len(g.Modules))
+	}
+	if g.Entries[0].Edges[0].To != g.Entries[1].Edges[0].To {
+		t.Errorf("expected entries to share the same node")
+	}
+}
+
+func TestWalkDuplicateEntries(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/a.ts": file(`export const a = 1`),
+	}, "src/a.ts", "src/a.ts")
+
+	if len(g.Entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(g.Entries))
+	}
+}
+
+func TestWalkNoEntries(t *testing.T) {
+	if _, err := New(fstest.MapFS{}, resolver.New(fstest.MapFS{}, nil)).Walk(); err == nil {
+		t.Fatalf("expected error for no entries")
 	}
 }
 
@@ -284,7 +318,7 @@ func TestWalkWide(t *testing.T) {
 	if len(g.Modules) != 202 {
 		t.Fatalf("expected 202 modules, got %d", len(g.Modules))
 	}
-	if len(g.Entry.Edges) != 200 {
-		t.Fatalf("expected 200 entry edges, got %d", len(g.Entry.Edges))
+	if len(g.Entries[0].Edges) != 200 {
+		t.Fatalf("expected 200 entry edges, got %d", len(g.Entries[0].Edges))
 	}
 }
