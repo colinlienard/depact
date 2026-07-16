@@ -32,7 +32,7 @@ Output adapts to arity: one entry → full detail (exclusive cost, barrels); man
 
 The CLI is the agent interface — compact, ranked, stable output, `--json` with one schema across arities. `tui` is the human front-end for the same navigation.
 
-Status: `analyze` implemented, including multi-entry walk, globs and the summary view. `why` maps directly onto `metrics.Why`; `diff` needs reverse-reachability in `metrics`; `check` needs a budget/threshold config and non-zero exit on violation.
+Status: `analyze` implemented, including multi-entry walk, globs and the summary view. `why` maps directly onto `metrics.Why`; `diff` needs reverse-reachability in `metrics`; `check` needs a budget/threshold config and non-zero exit on violation. `Walk` still aborts the whole union on the first read/parse/resolve failure — a per-entry error-tolerance mode (best-effort summary that records failures rather than failing the run) is needed before pointing `analyze` at large monorepos.
 
 ## Conventions
 

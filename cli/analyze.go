@@ -56,6 +56,9 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "analyze requires at least one entry file")
 		return 2
 	}
+	if *top < 0 {
+		*top = 0
+	}
 
 	g, err := flags.build(fs.Args())
 	if err != nil {
@@ -152,7 +155,7 @@ func writeDetail(w io.Writer, r analyzeReport, top int) {
 		fmt.Fprintf(w, "  ... and %d more\n", len(e.Exclusive)-len(shown))
 	}
 
-	writeBarrels(w, r.Barrels)
+	writeBarrels(w, r.Barrels, top)
 }
 
 func writeSummary(w io.Writer, r analyzeReport, top int) {
@@ -178,26 +181,34 @@ func writeSummary(w io.Writer, r analyzeReport, top int) {
 		fmt.Fprintf(w, "  ... and %d more (--top to adjust)\n", len(r.Entries)-len(shown))
 	}
 
-	writeBarrels(w, r.Barrels)
+	writeBarrels(w, r.Barrels, top)
 }
 
-func writeBarrels(w io.Writer, barrels []barrelInfo) {
+func writeBarrels(w io.Writer, barrels []barrelInfo, top int) {
 	fmt.Fprintln(w, "\nbarrels")
 	if len(barrels) == 0 {
 		fmt.Fprintln(w, "  (none)")
 	}
-	for _, b := range barrels {
+	shown := barrels
+	if len(shown) > top {
+		shown = shown[:top]
+	}
+	for _, b := range shown {
 		ns := ""
 		if b.Namespace {
 			ns = "  namespace"
 		}
 		fmt.Fprintf(w, "  %s\n    importers %d  symbols %d  deps %d%s\n", b.Path, b.Importers, b.Symbols, b.Deps, ns)
 	}
+	if len(barrels) > len(shown) {
+		fmt.Fprintf(w, "  ... and %d more\n", len(barrels)-len(shown))
+	}
 }
 
 func exclusiveList(g *walker.Graph, entry *walker.Node) []contributor {
-	out := make([]contributor, 0, len(g.Modules))
-	for p, cost := range metrics.Exclusive(g, entry) {
+	exclusive := metrics.Exclusive(g, entry)
+	out := make([]contributor, 0, len(exclusive))
+	for p, cost := range exclusive {
 		out = append(out, contributor{Path: p, Cost: cost})
 	}
 	sort.Slice(out, func(i, j int) bool {

@@ -115,7 +115,7 @@ func permute(args []string) []string {
 		}
 		positional = append(positional, a)
 	}
-	return append(flags, positional...)
+	return append(append(flags, "--"), positional...)
 }
 
 type target struct {

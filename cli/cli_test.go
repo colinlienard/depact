@@ -30,12 +30,12 @@ func TestPermute(t *testing.T) {
 		in   []string
 		want []string
 	}{
-		{"flags first", []string{"--json", "entry.ts"}, []string{"--json", "entry.ts"}},
-		{"flags after entry", []string{"entry.ts", "--json"}, []string{"--json", "entry.ts"}},
-		{"value flag after entry", []string{"entry.ts", "--project", "tsconfig.json"}, []string{"--project", "tsconfig.json", "entry.ts"}},
-		{"top flag after entry", []string{"entry.ts", "--top", "5"}, []string{"--top", "5", "entry.ts"}},
-		{"double dash stops", []string{"--json", "--", "-weird.ts"}, []string{"--json", "-weird.ts"}},
-		{"mixed", []string{"entry.ts", "--follow-externals", "--project", "p.json"}, []string{"--follow-externals", "--project", "p.json", "entry.ts"}},
+		{"flags first", []string{"--json", "entry.ts"}, []string{"--json", "--", "entry.ts"}},
+		{"flags after entry", []string{"entry.ts", "--json"}, []string{"--json", "--", "entry.ts"}},
+		{"value flag after entry", []string{"entry.ts", "--project", "tsconfig.json"}, []string{"--project", "tsconfig.json", "--", "entry.ts"}},
+		{"top flag after entry", []string{"entry.ts", "--top", "5"}, []string{"--top", "5", "--", "entry.ts"}},
+		{"double dash stops", []string{"--json", "--", "-weird.ts"}, []string{"--json", "--", "-weird.ts"}},
+		{"mixed", []string{"entry.ts", "--follow-externals", "--project", "p.json"}, []string{"--follow-externals", "--project", "p.json", "--", "entry.ts"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -264,6 +264,63 @@ func TestBuildReportExternals(t *testing.T) {
 	}
 }
 
+func TestBuildReportSharedByAllExcludesEntries(t *testing.T) {
+	// a.test imports b.test (also an entry) plus shared; b.test imports shared.
+	// shared is reachable from every entry, b.test is too, but entry nodes are
+	// never counted as "shared by all" — only shared qualifies.
+	g := graph(t, fstest.MapFS{
+		"src/a.test.ts": {Data: []byte("import './b.test'\nimport './shared'")},
+		"src/b.test.ts": {Data: []byte("import './shared'")},
+		"src/shared.ts": {Data: []byte("export const s = 1")},
+	}, "src/a.test.ts", "src/b.test.ts")
+
+	r := buildReport(g)
+	if r.Union.SharedByAll != 1 {
+		t.Errorf("sharedByAll = %d, want 1 (shared only, entry b.test excluded)", r.Union.SharedByAll)
+	}
+}
+
+func TestPercentile(t *testing.T) {
+	ascending := []int{10, 20, 30, 40, 50}
+	tests := []struct {
+		p    int
+		want int
+	}{
+		{0, 10},
+		{50, 30},
+		{90, 40}, // (5-1)*90/100 = 3 -> element 40
+		{100, 50},
+	}
+	for _, tt := range tests {
+		if got := percentile(ascending, tt.p); got != tt.want {
+			t.Errorf("percentile(%v, %d) = %d, want %d", ascending, tt.p, got, tt.want)
+		}
+	}
+	if got := percentile([]int{7}, 90); got != 7 {
+		t.Errorf("percentile single = %d, want 7", got)
+	}
+}
+
+func TestWriteBarrelsTop(t *testing.T) {
+	barrels := []barrelInfo{
+		{Path: "a", Deps: 3},
+		{Path: "b", Deps: 2},
+		{Path: "c", Deps: 1},
+	}
+	var buf bytes.Buffer
+	writeBarrels(&buf, barrels, 2)
+	text := buf.String()
+	if !strings.Contains(text, "a") || !strings.Contains(text, "b") {
+		t.Errorf("expected top-2 barrels shown:\n%s", text)
+	}
+	if strings.Contains(text, "\n  c\n") {
+		t.Errorf("expected barrel c truncated:\n%s", text)
+	}
+	if !strings.Contains(text, "... and 1 more") {
+		t.Errorf("expected truncation notice:\n%s", text)
+	}
+}
+
 func TestRunUnknownCommand(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	if code := Run([]string{"bogus"}, &out, &errBuf); code != 2 {
@@ -398,5 +455,37 @@ func TestRunAnalyzeMissingEntry(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	if code := Run([]string{"analyze"}, &out, &errBuf); code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
+	}
+}
+
+func TestRunAnalyzeNegativeTop(t *testing.T) {
+	t.Chdir("..")
+	var out, errBuf bytes.Buffer
+	code := Run([]string{
+		"analyze", "src/entry.ts",
+		"--project", "fixtures/barrel/tsconfig.json", "--top", "-1",
+	}, &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
+	}
+}
+
+func TestRunAnalyzeDashDashEntry(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "tsconfig.json"), "{}")
+	mustWrite(t, filepath.Join(dir, "-weird.ts"), "export const x = 1")
+	t.Chdir(dir)
+
+	var out, errBuf bytes.Buffer
+	code := Run([]string{"analyze", "--json", "--", "-weird.ts"}, &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
+	}
+	var r analyzeReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	if len(r.Entries) != 1 || r.Entries[0].Path != "-weird.ts" {
+		t.Errorf("got %+v, want single entry -weird.ts", r.Entries)
 	}
 }
