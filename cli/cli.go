@@ -151,6 +151,13 @@ func locate(project string, args []string) (target, error) {
 func anchor(args []string) string {
 	for _, a := range args {
 		if isPattern(a) {
+			prefix := literalPrefix(a)
+			if prefix == "" {
+				continue
+			}
+			if abs, err := filepath.Abs(prefix); err == nil {
+				return abs
+			}
 			continue
 		}
 		if abs, err := filepath.Abs(a); err == nil {
@@ -162,6 +169,18 @@ func anchor(args []string) string {
 		return "."
 	}
 	return cwd
+}
+
+func literalPrefix(pattern string) string {
+	segments := strings.Split(pattern, "/")
+	var literal []string
+	for _, s := range segments {
+		if isPattern(s) {
+			break
+		}
+		literal = append(literal, s)
+	}
+	return strings.Join(literal, "/")
 }
 
 func findRoot(dir string) string {

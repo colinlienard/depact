@@ -119,6 +119,39 @@ func TestLocatePatternOnly(t *testing.T) {
 	}
 }
 
+func TestLocateGlobPrefixRoot(t *testing.T) {
+	// an absolute glob anchors on its literal prefix, so root discovery walks up
+	// to the target repo (.git) without needing --project.
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, ".git", "HEAD"), "ref: refs/heads/main")
+	mustWrite(t, filepath.Join(dir, "tsconfig.json"), "{}")
+	mustWrite(t, filepath.Join(dir, "src", "a.test.ts"), "export const a = 1")
+
+	pattern := filepath.Join(dir, "src", "**", "*.test.ts")
+	tgt, err := locate("", []string{pattern})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tgt.root != dir || !reflect.DeepEqual(tgt.args, []string{"src/**/*.test.ts"}) {
+		t.Errorf("got root=%q args=%v, want root=%q args=[src/**/*.test.ts]", tgt.root, tgt.args, dir)
+	}
+}
+
+func TestLiteralPrefix(t *testing.T) {
+	for in, want := range map[string]string{
+		"/abs/src/**/*.test.ts": "/abs/src",
+		"src/**/*.ts":           "src",
+		"src/*.ts":              "src",
+		"**/*.ts":               "",
+		"*.ts":                  "",
+		"a/b/c.ts":              "a/b/c.ts",
+	} {
+		if got := literalPrefix(in); got != want {
+			t.Errorf("literalPrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestFindTsconfigIn(t *testing.T) {
 	fsys := fstest.MapFS{
 		"tsconfig.json":     {Data: []byte("{}")},
