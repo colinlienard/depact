@@ -19,6 +19,23 @@ var ErrPkgNotFound = errors.New("resolver: package not found")
 var ErrPkgNoEntries = errors.New("resolver: found no entries in package")
 
 func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
+	r.pkgMu.Lock()
+	if res, ok := r.pkgEntry[specifier]; ok {
+		r.pkgMu.Unlock()
+		return res.path, res.err
+	}
+	r.pkgMu.Unlock()
+
+	p, err := r.resolvePkgEntryUncached(specifier)
+
+	r.pkgMu.Lock()
+	r.pkgEntry[specifier] = pkgEntryResult{path: p, err: err}
+	r.pkgMu.Unlock()
+
+	return p, err
+}
+
+func (r *Resolver) resolvePkgEntryUncached(specifier string) (string, error) {
 	if specifier == "" {
 		return "", ErrPkgNotFound
 	}
@@ -27,16 +44,11 @@ func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
 
 	pkgPath := path.Join("node_modules", specifier, "package.json")
 
-	content, err := fs.ReadFile(r.fs, pkgPath)
+	data, err := r.loadPkg(pkgPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", ErrPkgNotFound
 		}
-		return "", err
-	}
-
-	var data PkgJSON
-	if err := json.Unmarshal(content, &data); err != nil {
 		return "", err
 	}
 
@@ -56,18 +68,18 @@ func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
 }
 
 func (r *Resolver) isWorkspaceLink(name string) bool {
-	r.mu.Lock()
+	r.linkMu.Lock()
 	if v, ok := r.links[name]; ok {
-		r.mu.Unlock()
+		r.linkMu.Unlock()
 		return v
 	}
-	r.mu.Unlock()
+	r.linkMu.Unlock()
 
 	v := r.resolveWorkspaceLink(name)
 
-	r.mu.Lock()
+	r.linkMu.Lock()
 	r.links[name] = v
-	r.mu.Unlock()
+	r.linkMu.Unlock()
 	return v
 }
 
@@ -184,21 +196,45 @@ func (r *Resolver) findEnclosingPkg(from string) (string, *PkgJSON, error) {
 	for {
 		p := path.Join(dir, "package.json")
 		if r.exists(p) {
-			content, err := fs.ReadFile(r.fs, p)
+			pkg, err := r.loadPkg(p)
 			if err != nil {
 				return "", nil, err
 			}
-			var pkg PkgJSON
-			if err := json.Unmarshal(content, &pkg); err != nil {
-				return "", nil, err
-			}
-			return dir, &pkg, nil
+			return dir, pkg, nil
 		}
 		if dir == "." || dir == "/" {
 			return "", nil, ErrPkgNotFound
 		}
 		dir = path.Dir(dir)
 	}
+}
+
+func (r *Resolver) loadPkg(p string) (*PkgJSON, error) {
+	r.pkgFileMu.Lock()
+	if res, ok := r.pkgFiles[p]; ok {
+		r.pkgFileMu.Unlock()
+		return res.pkg, res.err
+	}
+	r.pkgFileMu.Unlock()
+
+	pkg, err := parsePkg(r.fs, p)
+
+	r.pkgFileMu.Lock()
+	r.pkgFiles[p] = pkgFileResult{pkg: pkg, err: err}
+	r.pkgFileMu.Unlock()
+	return pkg, err
+}
+
+func parsePkg(fsys fs.FS, p string) (*PkgJSON, error) {
+	content, err := fs.ReadFile(fsys, p)
+	if err != nil {
+		return nil, err
+	}
+	var pkg PkgJSON
+	if err := json.Unmarshal(content, &pkg); err != nil {
+		return nil, err
+	}
+	return &pkg, nil
 }
 
 func matchPattern(obj map[string]json.RawMessage, key string) (json.RawMessage, string, bool) {

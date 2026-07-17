@@ -422,7 +422,9 @@ func TestResolverCache(t *testing.T) {
 	if !reflect.DeepEqual(first, expected) {
 		t.Fatalf("expected %+v, got %+v", expected, first)
 	}
-	if _, ok := r.cache["src/entry.ts\x00./mod"]; !ok {
+	key := cacheKey{from: "src/entry.ts", specifier: "./mod"}
+	sh := &r.cache[(fnv1a(key.from)^fnv1a(key.specifier))%numShards]
+	if _, ok := sh.m[key]; !ok {
 		t.Fatalf("expected result to be cached")
 	}
 

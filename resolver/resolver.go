@@ -8,14 +8,47 @@ import (
 	"sync"
 )
 
+const numShards = 256
+
+type cacheKey struct {
+	from      string
+	specifier string
+}
+
+type cacheShard struct {
+	mu sync.Mutex
+	m  map[cacheKey]Resolved
+}
+
 type Resolver struct {
 	fs    fs.FS
 	paths map[string][]string // tsconfig paths
-	mu    sync.Mutex
-	cache map[string]Resolved
-	links map[string]bool
+
+	cache [numShards]cacheShard
+
+	pkgMu    sync.Mutex
+	pkgEntry map[string]pkgEntryResult // specifier -> resolved package entry
+
+	pkgFileMu sync.Mutex
+	pkgFiles  map[string]pkgFileResult // package.json path -> parsed contents
+
+	dirMu sync.Mutex
+	dirs  map[string]map[string]bool // dir -> set of non-dir entry names
+
+	linkMu sync.Mutex
+	links  map[string]bool
 
 	IncludeTypes bool
+}
+
+type pkgEntryResult struct {
+	path string
+	err  error
+}
+
+type pkgFileResult struct {
+	pkg *PkgJSON
+	err error
 }
 
 type ResolveKind int
@@ -36,34 +69,54 @@ type Resolved struct {
 }
 
 func New(fsys fs.FS, paths map[string][]string) *Resolver {
-	return &Resolver{
-		fs:    fsys,
-		paths: paths,
-		cache: map[string]Resolved{},
-		links: map[string]bool{},
+	r := &Resolver{
+		fs:       fsys,
+		paths:    paths,
+		links:    map[string]bool{},
+		pkgEntry: map[string]pkgEntryResult{},
+		pkgFiles: map[string]pkgFileResult{},
+		dirs:     map[string]map[string]bool{},
 	}
+	for i := range r.cache {
+		r.cache[i].m = map[cacheKey]Resolved{}
+	}
+	return r
 }
 
 func (r *Resolver) Resolve(from, specifier string) (Resolved, error) {
-	key := from + "\x00" + specifier
+	key := cacheKey{from: from, specifier: specifier}
+	sh := &r.cache[(fnv1a(from)^fnv1a(specifier))%numShards]
 
-	r.mu.Lock()
-	if res, ok := r.cache[key]; ok {
-		r.mu.Unlock()
+	sh.mu.Lock()
+	if res, ok := sh.m[key]; ok {
+		sh.mu.Unlock()
 		return res, nil
 	}
-	r.mu.Unlock()
+	sh.mu.Unlock()
 
 	res, err := r.resolve(from, specifier)
 	if err != nil {
 		return res, err
 	}
 
-	r.mu.Lock()
-	r.cache[key] = res
-	r.mu.Unlock()
+	sh.mu.Lock()
+	sh.m[key] = res
+	sh.mu.Unlock()
 
 	return res, nil
+}
+
+func fnv1a(s string) uint32 {
+	const (
+		offset = 2166136261
+		prime  = 16777619
+	)
+	h := uint32(offset)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime
+	}
+	return h
 }
 
 func (r *Resolver) resolve(from, specifier string) (Resolved, error) {
@@ -112,14 +165,21 @@ func (r *Resolver) resolve(from, specifier string) (Resolved, error) {
 }
 
 func (r *Resolver) resolveFile(p string) (Resolved, bool) {
-	if stat, err := r.stat(p); err == nil && !stat.IsDir() {
+	entries := r.dirEntries(path.Dir(p))
+	base := path.Base(p)
+	if entries[base] {
 		return Resolved{Path: p}, true
 	}
-	if name, found := r.find(p); found {
-		return Resolved{Path: name}, true
+	for _, ext := range extensions {
+		if entries[base+ext] {
+			return Resolved{Path: p + ext}, true
+		}
 	}
-	if indexPath, found := r.find(path.Join(p, "index")); found {
-		return Resolved{Path: indexPath, Kind: ResolveKindIndex}, true
+	index := r.dirEntries(p)
+	for _, ext := range extensions {
+		if index["index"+ext] {
+			return Resolved{Path: path.Join(p, "index"+ext), Kind: ResolveKindIndex}, true
+		}
 	}
 	return Resolved{}, false
 }
@@ -188,20 +248,35 @@ func isIndexFile(p string) bool {
 	return false
 }
 
-func (r *Resolver) find(name string) (string, bool) {
-	for _, ext := range extensions {
-		if r.exists(name + ext) {
-			return name + ext, true
+func (r *Resolver) dirEntries(dir string) map[string]bool {
+	r.dirMu.Lock()
+	if entries, ok := r.dirs[dir]; ok {
+		r.dirMu.Unlock()
+		return entries
+	}
+	r.dirMu.Unlock()
+
+	entries := map[string]bool{}
+	if list, err := fs.ReadDir(r.fs, dir); err == nil {
+		for _, e := range list {
+			if e.IsDir() {
+				continue
+			}
+			if e.Type()&fs.ModeSymlink != 0 {
+				if info, err := fs.Stat(r.fs, path.Join(dir, e.Name())); err != nil || info.IsDir() {
+					continue
+				}
+			}
+			entries[e.Name()] = true
 		}
 	}
-	return "", false
-}
 
-func (r *Resolver) stat(name string) (fs.FileInfo, error) {
-	return fs.Stat(r.fs, name)
+	r.dirMu.Lock()
+	r.dirs[dir] = entries
+	r.dirMu.Unlock()
+	return entries
 }
 
 func (r *Resolver) exists(name string) bool {
-	_, err := r.stat(name)
-	return err == nil
+	return r.dirEntries(path.Dir(name))[path.Base(name)]
 }
