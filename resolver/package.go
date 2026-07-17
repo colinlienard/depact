@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -22,16 +23,7 @@ func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
 		return "", ErrPkgNotFound
 	}
 
-	subpath := ""
-	numberOfSlash := strings.Count(specifier, "/")
-	isScopedPkg := specifier[0] == '@'
-	if !isScopedPkg && numberOfSlash > 0 {
-		specifier, subpath, _ = strings.Cut(specifier, "/")
-	} else if isScopedPkg && numberOfSlash > 1 {
-		splited := strings.Split(specifier, "/")
-		specifier = strings.Join(splited[0:2], "/")
-		subpath = strings.Join(splited[2:], "/")
-	}
+	specifier, subpath := splitPkg(specifier)
 
 	pkgPath := path.Join("node_modules", specifier, "package.json")
 
@@ -61,6 +53,56 @@ func (r *Resolver) resolvePkgEntry(specifier string) (string, error) {
 	}
 
 	return "", ErrPkgNoEntries
+}
+
+func (r *Resolver) isWorkspaceLink(name string) bool {
+	r.mu.Lock()
+	if v, ok := r.links[name]; ok {
+		r.mu.Unlock()
+		return v
+	}
+	r.mu.Unlock()
+
+	v := r.resolveWorkspaceLink(name)
+
+	r.mu.Lock()
+	r.links[name] = v
+	r.mu.Unlock()
+	return v
+}
+
+func (r *Resolver) resolveWorkspaceLink(name string) bool {
+	root := path.Join("node_modules", name)
+	target, err := fs.ReadLink(r.fs, root)
+	if err != nil {
+		return false
+	}
+	if !path.IsAbs(target) {
+		target = path.Join(path.Dir(root), target)
+	}
+	if slices.Contains(strings.Split(path.Clean(target), "/"), "node_modules") {
+		return false
+	}
+	return true
+}
+
+func splitPkg(specifier string) (name, subpath string) {
+	isScoped := specifier != "" && specifier[0] == '@'
+	slashes := strings.Count(specifier, "/")
+	if !isScoped && slashes > 0 {
+		name, subpath, _ = strings.Cut(specifier, "/")
+		return name, subpath
+	}
+	if isScoped && slashes > 1 {
+		parts := strings.Split(specifier, "/")
+		return strings.Join(parts[:2], "/"), strings.Join(parts[2:], "/")
+	}
+	return specifier, ""
+}
+
+func pkgName(specifier string) string {
+	name, _ := splitPkg(specifier)
+	return name
 }
 
 func (r *Resolver) resolvePkgExports(exports json.RawMessage, subpath string) (string, error) {
@@ -94,7 +136,7 @@ func (r *Resolver) resolvePkgExports(exports json.RawMessage, subpath string) (s
 			if err != nil {
 				return "", err
 			}
-			return strings.Replace(target, "*", match, 1), nil
+			return strings.ReplaceAll(target, "*", match), nil
 		}
 		return "", ErrPkgNotFound
 	}
@@ -131,7 +173,7 @@ func (r *Resolver) resolvePkgImports(from, specifier string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return path.Join(pkgDir, strings.Replace(target, "*", match, 1)), nil
+		return path.Join(pkgDir, strings.ReplaceAll(target, "*", match)), nil
 	}
 
 	return "", ErrPkgNotFound
@@ -192,7 +234,8 @@ func isSubpathMap(obj map[string]json.RawMessage) bool {
 	return false
 }
 
-var conditions = []string{"types", "import", "default"}
+var runtimeConditions = []string{"import", "require", "default", "types"}
+var typeConditions = []string{"types", "import", "require", "default"}
 
 func (r *Resolver) resolveConditions(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
@@ -210,10 +253,17 @@ func (r *Resolver) resolveConditions(raw json.RawMessage) (string, error) {
 		return "", err
 	}
 
-	for _, cond := range conditions {
+	for _, cond := range r.conditions() {
 		if entry, ok := obj[cond]; ok {
 			return r.resolveConditions(entry)
 		}
 	}
 	return "", ErrPkgNotFound
+}
+
+func (r *Resolver) conditions() []string {
+	if r.IncludeTypes {
+		return typeConditions
+	}
+	return runtimeConditions
 }

@@ -12,6 +12,7 @@ func TestResolvePkgImports(t *testing.T) {
 		fsys      fstest.MapFS
 		from      string
 		specifier string
+		typeAware bool
 		expected  Resolved
 	}{
 		{
@@ -26,7 +27,18 @@ func TestResolvePkgImports(t *testing.T) {
 			expected:  Resolved{Path: "src/utils.js"},
 		},
 		{
-			name: "imports with conditional value",
+			name: "imports conditional value prefers runtime import",
+			fsys: fstest.MapFS{
+				"package.json": {Data: []byte(`{"imports":{"#log":{"types":"./src/log.d.ts","import":"./src/log.js"}}}`)},
+				"src/entry.ts": {},
+				"src/log.js":   {},
+			},
+			from:      "src/entry.ts",
+			specifier: "#log",
+			expected:  Resolved{Path: "src/log.js", Kind: ResolveKindFile},
+		},
+		{
+			name: "imports conditional value prefers types in type-aware mode",
 			fsys: fstest.MapFS{
 				"package.json": {Data: []byte(`{"imports":{"#log":{"types":"./src/log.d.ts","import":"./src/log.js"}}}`)},
 				"src/entry.ts": {},
@@ -34,7 +46,8 @@ func TestResolvePkgImports(t *testing.T) {
 			},
 			from:      "src/entry.ts",
 			specifier: "#log",
-			expected:  Resolved{Path: "src/log.d.ts"},
+			typeAware: true,
+			expected:  Resolved{Path: "src/log.d.ts", Kind: ResolveKindFile},
 		},
 		{
 			name: "imports with wildcard pattern",
@@ -83,6 +96,7 @@ func TestResolvePkgImports(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := New(tt.fsys, nil)
+			r.IncludeTypes = tt.typeAware
 			got, err := r.Resolve(tt.from, tt.specifier)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)

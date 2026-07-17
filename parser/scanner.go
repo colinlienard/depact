@@ -153,8 +153,14 @@ func (s *scanner) parseImport() error {
 		return nil // import.meta
 	}
 
+	switch s.peek() {
+	case ':', '?', ',', '}':
+		return nil // `import` used as an object property key, not a statement
+	}
+
 	onlyTypes := false
 	if s.peek() == 't' {
+		pos := s.i
 		word, err := s.nextWord()
 		if err != nil {
 			return err
@@ -162,6 +168,8 @@ func (s *scanner) parseImport() error {
 		if word == "type" {
 			onlyTypes = true
 			s.skipSpace()
+		} else {
+			s.i = pos
 		}
 	}
 
@@ -246,8 +254,14 @@ func (s *scanner) parseExport() error {
 
 	s.skipSpace()
 
+	switch s.peek() {
+	case ':', '(', '?', ',', '}', '=':
+		return nil // `export` used as a property/method key, or an `export =` assignment
+	}
+
 	onlyTypes := false
 	if s.peek() == 't' {
+		pos := s.i
 		word, err := s.nextWord()
 		if err != nil {
 			return err
@@ -255,6 +269,8 @@ func (s *scanner) parseExport() error {
 		if word == "type" {
 			onlyTypes = true
 			s.skipSpace()
+		} else {
+			s.i = pos
 		}
 	}
 
@@ -315,6 +331,7 @@ func (s *scanner) parseExport() error {
 			case "default":
 				exp.Symbols = append(exp.Symbols, Symbol{Kind: DefaultSymbol})
 				s.exports = append(s.exports, exp)
+				s.i-- // undo the scan loop's post-increment so the value (e.g. a template backtick) is scanned in-state
 				return nil
 
 			case "declare":
@@ -341,7 +358,14 @@ func (s *scanner) parseExport() error {
 			}
 		}
 
-		s.skipSpace()
+		s.skipSpaceAndComments()
+		if s.peek() == '{' || s.peek() == '[' {
+			for _, name := range s.parseBindingPattern() {
+				exp.Symbols = append(exp.Symbols, Symbol{Name: name, Kind: NamedSymbol, TypeOnly: onlyTypes})
+			}
+			s.exports = append(s.exports, exp)
+			return nil
+		}
 		symbol, err := s.symbolFromNextWord(onlyTypes)
 		if err != nil {
 			return err
@@ -359,7 +383,7 @@ func (s *scanner) parseNamed(onlyTypes bool) ([]Symbol, error) {
 	var symbols []Symbol
 	s.i++
 	for {
-		s.skipSpace()
+		s.skipSpaceAndComments()
 		if s.peek() == '}' {
 			s.i++
 			break
@@ -434,6 +458,124 @@ func (s *scanner) skipSpace() {
 		} else {
 			break
 		}
+	}
+}
+
+func (s *scanner) skipSpaceAndComments() {
+	for s.i < len(s.src) {
+		char := s.peek()
+		switch {
+		case char == ' ' || char == '\t' || char == '\n' || char == '\r':
+			s.i++
+		case char == '/' && s.peekAt(1) == '/':
+			for s.i < len(s.src) && s.peek() != '\n' {
+				s.i++
+			}
+		case char == '/' && s.peekAt(1) == '*':
+			s.i += 2
+			for s.i < len(s.src) && !(s.peek() == '*' && s.peekAt(1) == '/') {
+				s.i++
+			}
+			s.i += 2
+		default:
+			return
+		}
+	}
+}
+
+func (s *scanner) parseBindingPattern() []string {
+	var names []string
+	closeCh := byte('}')
+	if s.peek() == '[' {
+		closeCh = ']'
+	}
+	isObject := closeCh == '}'
+	s.i++
+	for s.i < len(s.src) {
+		s.skipSpaceAndComments()
+		switch s.peek() {
+		case closeCh:
+			s.i++
+			return names
+		case ',':
+			s.i++
+			continue
+		}
+		if s.peek() == '.' && s.peekAt(1) == '.' && s.peekAt(2) == '.' {
+			s.i += 3
+			s.skipSpaceAndComments()
+		}
+		if c := s.peek(); c == '{' || c == '[' {
+			names = append(names, s.parseBindingPattern()...)
+		} else {
+			word, err := s.nextWord()
+			if err != nil {
+				s.i++
+				continue
+			}
+			if isObject {
+				s.skipSpaceAndComments()
+				if s.peek() == ':' {
+					s.i++
+					s.skipSpaceAndComments()
+					if c := s.peek(); c == '{' || c == '[' {
+						names = append(names, s.parseBindingPattern()...)
+					} else if target, err := s.nextWord(); err == nil {
+						names = append(names, target)
+					}
+				} else {
+					names = append(names, word)
+				}
+			} else {
+				names = append(names, word)
+			}
+		}
+		s.skipSpaceAndComments()
+		if s.peek() == '=' {
+			s.i++
+			s.skipDefaultValue()
+		}
+	}
+	return names
+}
+
+func (s *scanner) skipDefaultValue() {
+	depth := 0
+	for s.i < len(s.src) {
+		switch s.peek() {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			if depth == 0 {
+				return
+			}
+			depth--
+		case ',':
+			if depth == 0 {
+				return
+			}
+		case '"', '\'', '`':
+			s.skipStringLiteral()
+			continue
+		}
+		s.i++
+	}
+}
+
+func (s *scanner) skipStringLiteral() {
+	quote := s.peek()
+	s.i++
+	for s.i < len(s.src) {
+		char := s.peek()
+		if char == '\\' {
+			s.i += 2
+			continue
+		}
+		if char == quote {
+			s.i++
+			return
+		}
+		s.i++
 	}
 }
 

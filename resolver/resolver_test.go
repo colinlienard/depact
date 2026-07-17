@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"io/fs"
 	"reflect"
 	"sync"
 	"testing"
@@ -334,6 +335,78 @@ func TestResolverWithPaths(t *testing.T) {
 	}
 }
 
+func TestResolverWorkspaceLink(t *testing.T) {
+	tests := []struct {
+		name      string
+		fsys      fstest.MapFS
+		specifier string
+		expected  Resolved
+	}{
+		{
+			name: "symlink escaping node_modules is internal",
+			fsys: fstest.MapFS{
+				"node_modules/@scope/pkg":   {Mode: fs.ModeSymlink, Data: []byte("../../packages/pkg")},
+				"packages/pkg/package.json": {Data: []byte(`{"main":"src/index.ts"}`)},
+				"packages/pkg/src/index.ts": {},
+			},
+			specifier: "@scope/pkg",
+			expected:  Resolved{Path: "node_modules/@scope/pkg/src/index.ts", Kind: ResolveKindIndex, External: false},
+		},
+		{
+			name: "workspace non-index entry stays package kind",
+			fsys: fstest.MapFS{
+				"node_modules/@scope/pkg":   {Mode: fs.ModeSymlink, Data: []byte("../../packages/pkg")},
+				"packages/pkg/package.json": {Data: []byte(`{"main":"src/main.ts"}`)},
+				"packages/pkg/src/main.ts":  {},
+			},
+			specifier: "@scope/pkg",
+			expected:  Resolved{Path: "node_modules/@scope/pkg/src/main.ts", Kind: ResolveKindPackage, External: false},
+		},
+		{
+			name: "unscoped symlink escaping node_modules is internal",
+			fsys: fstest.MapFS{
+				"node_modules/pkg":          {Mode: fs.ModeSymlink, Data: []byte("../packages/pkg")},
+				"packages/pkg/package.json": {Data: []byte(`{"main":"index.js"}`)},
+				"packages/pkg/index.js":     {},
+			},
+			specifier: "pkg",
+			expected:  Resolved{Path: "node_modules/pkg/index.js", Kind: ResolveKindIndex, External: false},
+		},
+		{
+			name: "plain package stays external",
+			fsys: fstest.MapFS{
+				"node_modules/react/package.json": {Data: []byte(`{"main":"index.js"}`)},
+				"node_modules/react/index.js":     {},
+			},
+			specifier: "react",
+			expected:  Resolved{Path: "node_modules/react/index.js", Kind: ResolveKindPackage, External: true},
+		},
+		{
+			name: "symlink still inside node_modules stays external",
+			fsys: fstest.MapFS{
+				"node_modules/react": {Mode: fs.ModeSymlink, Data: []byte("./.pnpm/react/node_modules/react")},
+				"node_modules/.pnpm/react/node_modules/react/package.json": {Data: []byte(`{"main":"index.js"}`)},
+				"node_modules/.pnpm/react/node_modules/react/index.js":     {},
+			},
+			specifier: "react",
+			expected:  Resolved{Path: "node_modules/react/index.js", Kind: ResolveKindPackage, External: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New(tt.fsys, nil)
+			got, err := r.Resolve("src/entry.ts", tt.specifier)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("expected %+v, got %+v", tt.expected, got)
+			}
+		})
+	}
+}
+
 func TestResolverCache(t *testing.T) {
 	fsys := fstest.MapFS{
 		"src/entry.ts": {},
@@ -355,10 +428,8 @@ func TestResolverCache(t *testing.T) {
 
 	// Concurrent resolves must be race-free and consistent.
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			got, err := r.Resolve("src/entry.ts", "./mod")
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -366,7 +437,7 @@ func TestResolverCache(t *testing.T) {
 			if !reflect.DeepEqual(got, expected) {
 				t.Errorf("expected %+v, got %+v", expected, got)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

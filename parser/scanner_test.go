@@ -43,6 +43,11 @@ func TestScannerEveryImport(t *testing.T) {
 		{"nested template inside interpolation", "const x = `a${`b`}c`\nimport foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo"}}}},
 		{"object literal in interpolation", "const x = `${ {a: 1} }`\nimport foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo"}}}},
 		{"string in interpolation", "const x = `${\"}\"}`\nimport foo from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "foo"}}}},
+
+		{"default import whose name starts with t", "import toast from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "toast"}}}},
+		{"default import named exactly t-word", "import theme from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: DefaultSymbol, Name: "theme"}}}},
+		{"block comment inside named import", "import { /* keep */ foo } from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo"}}}},
+		{"line comment inside named import", "import {\n  // keep\n  foo,\n} from 'mod'", Import{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo"}}}},
 	}
 
 	for _, tt := range tests {
@@ -141,6 +146,11 @@ func TestScannerEveryExport(t *testing.T) {
 		{"newlines between tokens", "export\n{\n\tfoo,\n\tbar,\n}\nfrom\n'mod'",
 			[]Import{{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo"}, {Kind: NamedSymbol, Name: "bar"}}}},
 			[]Export{{From: "mod", Symbols: []Symbol{{Kind: NamedSymbol, Name: "foo"}, {Kind: NamedSymbol, Name: "bar"}}}}},
+
+		{"export const object destructuring", "export const { a, b } = createContext()", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "a"}, {Kind: NamedSymbol, Name: "b"}}}}},
+		{"export const destructuring with rename and default", "export const { a: x, b = 1 } = c", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "x"}, {Kind: NamedSymbol, Name: "b"}}}}},
+		{"export const array destructuring", "export const [ a, b ] = tuple", nil, []Export{{Symbols: []Symbol{{Kind: NamedSymbol, Name: "a"}, {Kind: NamedSymbol, Name: "b"}}}}},
+		{"export default template literal ignores its contents", "export default `import x from \"m\"`", nil, []Export{{Symbols: []Symbol{{Kind: DefaultSymbol}}}}},
 	}
 
 	for _, tt := range tests {
@@ -177,6 +187,10 @@ func TestScannerNonExports(t *testing.T) {
 		{"reexport identifier", "const reexport = 1"},
 		{"property access export", "obj.export = 1"},
 		{"property access export with chain", "foo.export.bar"},
+		{"export as object key", "const o = { export: z.boolean() }"},
+		{"export as object method", "const o = { export() {} }"},
+		{"export as optional type member", "type T = { export?: boolean }"},
+		{"export assignment", "export = someLocal"},
 		{"empty source", ""},
 		{"no exports at all", "const x = 1\nfunction y() { return x }"},
 	}
@@ -216,6 +230,7 @@ func TestScannerNonImports(t *testing.T) {
 		{"reimport identifier", "const reimport = 1"},
 		{"property access import", "obj.import('mod')"},
 		{"property access import with chain", "foo.import.bar"},
+		{"import as object key", "const o = { import: 1 }"},
 		{"import.meta", "console.log(import.meta)"},
 		{"import.meta.ENV", "const e = import.meta.ENV.MODE"},
 		{"jsdoc block comment", "/** @type {string} */\nconst x = 1"},

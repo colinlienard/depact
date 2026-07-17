@@ -27,8 +27,11 @@ commands:
 
 flags (shared):
   --json               emit machine-readable JSON instead of text
-  --type               include type-only imports (skipped by default)
+  --type               include type-only imports (skipped by default) and
+                       prefer the 'types' export condition over runtime
   --follow-externals   walk into node_modules dependencies
+  --assets             count non-JS asset imports (css, images, fonts) as
+                       modules; excluded by default
   --top <n>            show at most n rows in ranked lists (default 20)
   --project <path>     path to tsconfig.json; its directory becomes the
                        project root and entries are given relative to it.
@@ -61,6 +64,7 @@ type commonFlags struct {
 	json            bool
 	typeImports     bool
 	followExternals bool
+	assets          bool
 	project         string
 }
 
@@ -68,6 +72,7 @@ func (c *commonFlags) bind(fs *flag.FlagSet) {
 	fs.BoolVar(&c.json, "json", false, "emit JSON instead of text")
 	fs.BoolVar(&c.typeImports, "type", false, "include type-only imports")
 	fs.BoolVar(&c.followExternals, "follow-externals", false, "walk into node_modules")
+	fs.BoolVar(&c.assets, "assets", false, "count non-JS asset imports (css, images, fonts) as modules")
 	fs.StringVar(&c.project, "project", "", "path to tsconfig.json")
 }
 
@@ -91,6 +96,8 @@ func (c *commonFlags) build(args []string) (*walker.Graph, error) {
 	}
 	p.Walker.FollowExternals = c.followExternals
 	p.Walker.SkipTypeOnly = !c.typeImports
+	p.Walker.IncludeAssets = c.assets
+	p.Resolver.IncludeTypes = c.typeImports
 
 	return p.Walker.Walk(entries...)
 }
