@@ -6,7 +6,7 @@ import (
 )
 
 type Graph struct {
-	Entry   *Node
+	Entries []*Node
 	Modules map[string]*Node
 }
 

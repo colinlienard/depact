@@ -22,25 +22,25 @@ func Closure(g *walker.Graph) map[string]int {
 	return out
 }
 
-func Exclusive(g *walker.Graph) map[string]int {
-	total := reachable(g.Entry, nil)
+func Exclusive(g *walker.Graph, entry *walker.Node) map[string]int {
+	total := reachable(entry, nil)
 	out := make(map[string]int, len(total)-1)
 	for n := range total {
-		if n == g.Entry {
+		if n == entry {
 			continue
 		}
-		out[n.Module.Path] = len(total) - len(reachable(g.Entry, n))
+		out[n.Module.Path] = len(total) - len(reachable(entry, n))
 	}
 	return out
 }
 
-func Why(g *walker.Graph, target string) []*walker.Node {
+func Why(g *walker.Graph, entry *walker.Node, target string) []*walker.Node {
 	dest := g.Modules[target]
-	if dest == nil || g.Entry == nil {
+	if dest == nil || entry == nil {
 		return nil
 	}
-	prev := map[*walker.Node]*walker.Node{g.Entry: nil}
-	queue := []*walker.Node{g.Entry}
+	prev := map[*walker.Node]*walker.Node{entry: nil}
+	queue := []*walker.Node{entry}
 	for len(queue) > 0 {
 		n := queue[0]
 		queue = queue[1:]
@@ -60,6 +60,10 @@ func Why(g *walker.Graph, target string) []*walker.Node {
 		}
 	}
 	return nil
+}
+
+func Reach(n *walker.Node) map[*walker.Node]bool {
+	return reachable(n, nil)
 }
 
 func Barrels(g *walker.Graph) map[string]*Barrel {

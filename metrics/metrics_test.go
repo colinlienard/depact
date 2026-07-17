@@ -9,9 +9,9 @@ import (
 	"depact/walker"
 )
 
-func walk(t *testing.T, fsys fstest.MapFS, entry string) *walker.Graph {
+func walk(t *testing.T, fsys fstest.MapFS, entries ...string) *walker.Graph {
 	t.Helper()
-	g, err := walker.New(fsys, resolver.New(fsys, nil)).Walk(entry)
+	g, err := walker.New(fsys, resolver.New(fsys, nil)).Walk(entries...)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -61,7 +61,8 @@ func TestClosureWithCycle(t *testing.T) {
 }
 
 func TestExclusive(t *testing.T) {
-	got := Exclusive(diamond(t))
+	g := diamond(t)
+	got := Exclusive(g, g.Entries[0])
 	expected := map[string]int{
 		"src/a.ts":      1, // shared survives via b
 		"src/b.ts":      2, // b and only
@@ -70,6 +71,25 @@ func TestExclusive(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, expected) {
 		t.Errorf("expected %v, got %v", expected, got)
+	}
+}
+
+func TestExclusivePerEntry(t *testing.T) {
+	// a -> shared, b -> shared + only: exclusive cost depends on the entry.
+	g := walk(t, fstest.MapFS{
+		"src/a.ts":      file(`import './shared'`),
+		"src/b.ts":      file("import './shared'\nimport './only'"),
+		"src/shared.ts": file(`export const s = 1`),
+		"src/only.ts":   file(`export const o = 1`),
+	}, "src/a.ts", "src/b.ts")
+
+	fromA := Exclusive(g, g.Entries[0])
+	fromB := Exclusive(g, g.Entries[1])
+	if !reflect.DeepEqual(fromA, map[string]int{"src/shared.ts": 1}) {
+		t.Errorf("from a: got %v", fromA)
+	}
+	if !reflect.DeepEqual(fromB, map[string]int{"src/shared.ts": 1, "src/only.ts": 1}) {
+		t.Errorf("from b: got %v", fromB)
 	}
 }
 
@@ -83,7 +103,7 @@ func TestWhyShortestPath(t *testing.T) {
 		"src/target.ts": file(`export const t = 1`),
 	}, "src/entry.ts")
 
-	chain := Why(g, "src/target.ts")
+	chain := Why(g, g.Entries[0], "src/target.ts")
 	var got []string
 	for _, n := range chain {
 		got = append(got, n.Module.Path)
@@ -96,14 +116,15 @@ func TestWhyShortestPath(t *testing.T) {
 
 func TestWhyEntryIsTarget(t *testing.T) {
 	g := diamond(t)
-	chain := Why(g, "src/entry.ts")
-	if len(chain) != 1 || chain[0] != g.Entry {
+	chain := Why(g, g.Entries[0], "src/entry.ts")
+	if len(chain) != 1 || chain[0] != g.Entries[0] {
 		t.Errorf("expected [entry], got %v", chain)
 	}
 }
 
 func TestWhyUnknownTarget(t *testing.T) {
-	if chain := Why(diamond(t), "src/nope.ts"); chain != nil {
+	g := diamond(t)
+	if chain := Why(g, g.Entries[0], "src/nope.ts"); chain != nil {
 		t.Errorf("expected nil, got %v", chain)
 	}
 }

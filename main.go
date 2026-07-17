@@ -1,9 +1,11 @@
 package main
 
 import (
-	"depact/parser"
+	"os"
+
+	"depact/cli"
 )
 
 func main() {
-	_, _ = parser.Parse([]byte("import x from 'mod'"))
+	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr))
 }
