@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -79,10 +80,8 @@ func (r *Resolver) resolveWorkspaceLink(name string) bool {
 	if !path.IsAbs(target) {
 		target = path.Join(path.Dir(root), target)
 	}
-	for _, seg := range strings.Split(path.Clean(target), "/") {
-		if seg == "node_modules" {
-			return false
-		}
+	if slices.Contains(strings.Split(path.Clean(target), "/"), "node_modules") {
+		return false
 	}
 	return true
 }

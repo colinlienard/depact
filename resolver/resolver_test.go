@@ -428,10 +428,8 @@ func TestResolverCache(t *testing.T) {
 
 	// Concurrent resolves must be race-free and consistent.
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 50 {
+		wg.Go(func() {
 			got, err := r.Resolve("src/entry.ts", "./mod")
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
@@ -439,7 +437,7 @@ func TestResolverCache(t *testing.T) {
 			if !reflect.DeepEqual(got, expected) {
 				t.Errorf("expected %+v, got %+v", expected, got)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

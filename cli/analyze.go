@@ -75,7 +75,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	}
 
 	report := buildReport(g)
-	if *closure {
+	if *closure && flags.json {
 		addClosures(&report, g)
 	}
 	if flags.json {

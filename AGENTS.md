@@ -32,7 +32,7 @@ Output adapts to arity: one entry → full detail (exclusive cost, barrels); man
 
 The CLI is the agent interface — compact, ranked, stable output, `--json` with one schema across arities. `tui` is the human front-end for the same navigation.
 
-Status: `analyze` implemented, including multi-entry walk, globs and the summary view. `why` maps directly onto `metrics.Why`; `diff` needs reverse-reachability in `metrics`; `check` needs a budget/threshold config and non-zero exit on violation. `Walk` is error-tolerant: read/parse/resolve failures on a module are recorded in `Graph.Failures` (and surfaced by the CLI) rather than aborting the union, so `analyze` runs over large monorepos best-effort. Remaining gap: symlinked pnpm workspace packages (`packages/*` under a `@scope`) resolve through `node_modules` and are treated as external leaves, so their source isn't walked by default — a realpath-based "workspace is internal" tier is still needed for accurate closures on monorepos.
+Status: `analyze` implemented, including multi-entry walk, globs and the summary view. `why` maps directly onto `metrics.Why`; `diff` needs reverse-reachability in `metrics`; `check` needs a budget/threshold config and non-zero exit on violation. `Walk` is error-tolerant: read/parse/resolve failures on a module are recorded in `Graph.Failures` (and surfaced by the CLI) rather than aborting the union, so `analyze` runs over large monorepos best-effort. Symlinked pnpm workspace packages (`packages/*` linked into `node_modules`) are detected via their symlink target and treated as internal, so their source is walked into the closure; only symlinks that stay within `node_modules` (e.g. pnpm's `.pnpm` store) remain external leaves.
 
 ## Conventions
 

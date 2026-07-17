@@ -377,7 +377,7 @@ func TestWalkMissingEntry(t *testing.T) {
 func TestWalkWide(t *testing.T) {
 	fsys := fstest.MapFS{}
 	entry := ""
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		entry += fmt.Sprintf("import './mod%d'\n", i)
 		fsys[fmt.Sprintf("src/mod%d.ts", i)] = file(`import { s } from './shared'`)
 	}

@@ -72,11 +72,9 @@ func (s *state) visit(key string, res resolver.Resolved, walkable bool) *Node {
 		return n
 	}
 
-	s.wg.Add(1)
-	go func() {
-		defer s.wg.Done()
+	s.wg.Go(func() {
 		s.scan(n)
-	}()
+	})
 	return n
 }
 
@@ -126,10 +124,13 @@ func (s *state) link(n *Node, imp *parser.Import) error {
 }
 
 func (s *state) recordFailure(n *Node, err error) {
-	n.Failed = true
 	s.failMu.Lock()
+	defer s.failMu.Unlock()
+	if n.Failed {
+		return
+	}
+	n.Failed = true
 	s.graph.Failures = append(s.graph.Failures, Failure{Path: n.Module.Path, Err: err.Error()})
-	s.failMu.Unlock()
 }
 
 var assetExtensions = map[string]bool{
