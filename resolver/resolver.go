@@ -13,6 +13,9 @@ type Resolver struct {
 	paths map[string][]string // tsconfig paths
 	mu    sync.Mutex
 	cache map[string]Resolved
+	links map[string]bool
+
+	IncludeTypes bool
 }
 
 type ResolveKind int
@@ -37,6 +40,7 @@ func New(fsys fs.FS, paths map[string][]string) *Resolver {
 		fs:    fsys,
 		paths: paths,
 		cache: map[string]Resolved{},
+		links: map[string]bool{},
 	}
 }
 
@@ -97,7 +101,8 @@ func (r *Resolver) resolve(from, specifier string) (Resolved, error) {
 
 	p, err := r.resolvePkgEntry(specifier)
 	if err == nil {
-		return Resolved{Path: p, Kind: ResolveKindPackage, External: true}, nil
+		external := !r.isWorkspaceLink(pkgName(specifier))
+		return Resolved{Path: p, Kind: pkgKind(p, external), External: external}, nil
 	}
 	if !errors.Is(err, ErrPkgNotFound) && !errors.Is(err, ErrPkgNoEntries) {
 		return Resolved{}, err
@@ -107,18 +112,14 @@ func (r *Resolver) resolve(from, specifier string) (Resolved, error) {
 }
 
 func (r *Resolver) resolveFile(p string) (Resolved, bool) {
-	if stat, err := r.stat(p); err == nil {
-		if stat.IsDir() {
-			indexPath, found := r.find(path.Join(p, "index"))
-			if !found {
-				return Resolved{}, false
-			}
-			return Resolved{Path: indexPath, Kind: ResolveKindIndex}, true
-		}
+	if stat, err := r.stat(p); err == nil && !stat.IsDir() {
 		return Resolved{Path: p}, true
 	}
 	if name, found := r.find(p); found {
 		return Resolved{Path: name}, true
+	}
+	if indexPath, found := r.find(path.Join(p, "index")); found {
+		return Resolved{Path: indexPath, Kind: ResolveKindIndex}, true
 	}
 	return Resolved{}, false
 }
@@ -168,7 +169,24 @@ func matchPaths(paths map[string][]string, specifier string) ([]string, string, 
 	return bestSubs, bestMatch, true
 }
 
-var extensions = []string{".ts", ".tsx", ".d.ts", ".js", ".jsx"}
+var extensions = []string{".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".d.ts"}
+
+func pkgKind(p string, external bool) ResolveKind {
+	if !external && isIndexFile(p) {
+		return ResolveKindIndex
+	}
+	return ResolveKindPackage
+}
+
+func isIndexFile(p string) bool {
+	base := path.Base(p)
+	for _, ext := range extensions {
+		if base == "index"+ext {
+			return true
+		}
+	}
+	return false
+}
 
 func (r *Resolver) find(name string) (string, bool) {
 	for _, ext := range extensions {

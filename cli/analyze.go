@@ -12,9 +12,15 @@ import (
 )
 
 type analyzeReport struct {
-	Entries []entryReport `json:"entries"`
-	Union   unionStats    `json:"union"`
-	Barrels []barrelInfo  `json:"barrels"`
+	Entries  []entryReport `json:"entries"`
+	Union    unionStats    `json:"union"`
+	Barrels  []barrelInfo  `json:"barrels"`
+	Failures []failureInfo `json:"failures,omitempty"`
+}
+
+type failureInfo struct {
+	Path string `json:"path"`
+	Err  string `json:"error"`
 }
 
 type entryReport struct {
@@ -22,6 +28,7 @@ type entryReport struct {
 	Modules   int           `json:"modules"`
 	Externals int           `json:"externals"`
 	Exclusive []contributor `json:"exclusive,omitempty"`
+	Closure   []string      `json:"closure,omitempty"`
 }
 
 type unionStats struct {
@@ -49,6 +56,7 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	var flags commonFlags
 	flags.bind(fs)
 	top := fs.Int("top", 20, "show at most n rows in ranked lists")
+	closure := fs.Bool("closure", false, "include the full module closure per entry in JSON output")
 	if err := fs.Parse(permute(args)); err != nil {
 		return 2
 	}
@@ -67,6 +75,9 @@ func runAnalyze(args []string, stdout, stderr io.Writer) int {
 	}
 
 	report := buildReport(g)
+	if *closure {
+		addClosures(&report, g)
+	}
 	if flags.json {
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
@@ -128,10 +139,33 @@ func buildReport(g *walker.Graph) analyzeReport {
 		}
 	}
 
+	failures := make([]failureInfo, 0, len(g.Failures))
+	for _, f := range g.Failures {
+		failures = append(failures, failureInfo{Path: f.Path, Err: f.Err})
+	}
+	sort.Slice(failures, func(i, j int) bool { return failures[i].Path < failures[j].Path })
+
 	return analyzeReport{
-		Entries: entries,
-		Union:   unionStats{Modules: len(g.Modules), Externals: externals, SharedByAll: sharedByAll},
-		Barrels: barrelList(g),
+		Entries:  entries,
+		Union:    unionStats{Modules: len(g.Modules), Externals: externals, SharedByAll: sharedByAll},
+		Barrels:  barrelList(g),
+		Failures: failures,
+	}
+}
+
+func addClosures(r *analyzeReport, g *walker.Graph) {
+	byPath := map[string][]string{}
+	for _, e := range g.Entries {
+		reach := metrics.Reach(e)
+		paths := make([]string, 0, len(reach))
+		for n := range reach {
+			paths = append(paths, n.Module.Path)
+		}
+		sort.Strings(paths)
+		byPath[e.Module.Path] = paths
+	}
+	for i := range r.Entries {
+		r.Entries[i].Closure = byPath[r.Entries[i].Path]
 	}
 }
 
@@ -156,6 +190,7 @@ func writeDetail(w io.Writer, r analyzeReport, top int) {
 	}
 
 	writeBarrels(w, r.Barrels, top)
+	writeFailures(w, r.Failures, top)
 }
 
 func writeSummary(w io.Writer, r analyzeReport, top int) {
@@ -182,6 +217,24 @@ func writeSummary(w io.Writer, r analyzeReport, top int) {
 	}
 
 	writeBarrels(w, r.Barrels, top)
+	writeFailures(w, r.Failures, top)
+}
+
+func writeFailures(w io.Writer, failures []failureInfo, top int) {
+	if len(failures) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "\nunreadable (%d, skipped)\n", len(failures))
+	shown := failures
+	if len(shown) > top {
+		shown = shown[:top]
+	}
+	for _, f := range shown {
+		fmt.Fprintf(w, "  %s: %s\n", f.Path, f.Err)
+	}
+	if len(failures) > len(shown) {
+		fmt.Fprintf(w, "  ... and %d more\n", len(failures)-len(shown))
+	}
 }
 
 func writeBarrels(w io.Writer, barrels []barrelInfo, top int) {

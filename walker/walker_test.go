@@ -2,6 +2,7 @@ package walker
 
 import (
 	"fmt"
+	"io/fs"
 	"testing"
 	"testing/fstest"
 
@@ -137,6 +138,48 @@ func TestWalkExternalIsLeaf(t *testing.T) {
 	}
 	if len(ext.Edges) != 0 {
 		t.Errorf("expected external node not to be walked, got edges %v", edges(ext))
+	}
+}
+
+func TestWalkWorkspacePackageIsInternal(t *testing.T) {
+	fsys := fstest.MapFS{
+		"webapps/app/src/index.ts":         file("import { shared } from '@ws/lib'\nimport _ from 'lodash'"),
+		"node_modules/@ws/lib":             {Mode: fs.ModeSymlink, Data: []byte("../../packages/lib")},
+		"packages/lib/package.json":        file(`{"main":"src/index.ts"}`),
+		"packages/lib/src/index.ts":        file("export { shared } from './shared'"),
+		"packages/lib/src/shared.ts":       file("export const shared = 1"),
+		"node_modules/lodash/package.json": file(`{"main":"./index.js"}`),
+		"node_modules/lodash/index.js":     file("import './internal'"),
+		"node_modules/lodash/internal.js":  file("export const d = 1"),
+	}
+	g, err := New(fsys, resolver.New(fsys, nil)).Walk("webapps/app/src/index.ts")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	lib := g.Modules["node_modules/@ws/lib/src/index.ts"]
+	if lib == nil || lib.External {
+		t.Fatalf("expected workspace package to be internal, got %+v", lib)
+	}
+	if got := edges(lib); len(got) != 1 || got[0] != "node_modules/@ws/lib/src/shared.ts" {
+		t.Errorf("expected workspace source to be walked, got edges %v", got)
+	}
+	if g.Modules["node_modules/@ws/lib/src/shared.ts"] == nil {
+		t.Errorf("expected transitive workspace source to be walked")
+	}
+	if g.Entries[0].Edges[0].Kind != resolver.ResolveKindIndex {
+		t.Errorf("expected cross-package barrel edge kind Index, got %v", g.Entries[0].Edges[0].Kind)
+	}
+
+	lodash := g.Modules["node_modules/lodash/index.js"]
+	if lodash == nil || !lodash.External {
+		t.Fatalf("expected real third-party dep to stay external, got %+v", lodash)
+	}
+	if len(lodash.Edges) != 0 {
+		t.Errorf("expected third-party dep to remain a leaf, got edges %v", edges(lodash))
+	}
+	if g.Modules["node_modules/lodash/internal.js"] != nil {
+		t.Errorf("expected third-party source not to be walked")
 	}
 }
 
@@ -291,6 +334,27 @@ func TestWalkDuplicateEntries(t *testing.T) {
 	}
 }
 
+func TestWalkTolerantOfBrokenDependency(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":  file(`import './ok'` + "\n" + `import './broken'`),
+		"src/ok.ts":     file(`export const ok = 1`),
+		"src/broken.ts": file(`import * x from 'm'`), // namespace import missing `as` -> parse error
+	}, "src/entry.ts")
+
+	if n, ok := g.Modules["src/ok.ts"]; !ok || n.Failed {
+		t.Fatalf("expected the healthy sibling to still be walked")
+	}
+	if len(g.Failures) != 1 {
+		t.Fatalf("expected 1 recorded failure, got %d: %+v", len(g.Failures), g.Failures)
+	}
+	if g.Failures[0].Path != "src/broken.ts" {
+		t.Fatalf("expected failure on src/broken.ts, got %q", g.Failures[0].Path)
+	}
+	if !g.Modules["src/broken.ts"].Failed {
+		t.Fatalf("expected src/broken.ts node to be marked Failed")
+	}
+}
+
 func TestWalkNoEntries(t *testing.T) {
 	if _, err := New(fstest.MapFS{}, resolver.New(fstest.MapFS{}, nil)).Walk(); err == nil {
 		t.Fatalf("expected error for no entries")
@@ -298,9 +362,15 @@ func TestWalkNoEntries(t *testing.T) {
 }
 
 func TestWalkMissingEntry(t *testing.T) {
-	_, err := New(fstest.MapFS{}, resolver.New(fstest.MapFS{}, nil)).Walk("src/entry.ts")
-	if err == nil {
-		t.Fatalf("expected error for missing entry")
+	g, err := New(fstest.MapFS{}, resolver.New(fstest.MapFS{}, nil)).Walk("src/entry.ts")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(g.Failures) != 1 || g.Failures[0].Path != "src/entry.ts" {
+		t.Fatalf("expected one recorded failure for the missing entry, got %+v", g.Failures)
+	}
+	if !g.Entries[0].Failed {
+		t.Fatalf("expected the entry node to be marked Failed")
 	}
 }
 

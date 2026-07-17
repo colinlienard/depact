@@ -17,6 +17,7 @@ type Walker struct {
 
 	FollowExternals bool
 	SkipTypeOnly    bool
+	IncludeAssets   bool
 }
 
 type state struct {
@@ -24,8 +25,7 @@ type state struct {
 	graph  *Graph
 	mu     sync.Mutex
 	wg     sync.WaitGroup
-	errMu  sync.Mutex
-	err    error
+	failMu sync.Mutex
 }
 
 func New(fsys fs.FS, r *resolver.Resolver) *Walker {
@@ -49,9 +49,6 @@ func (w *Walker) Walk(entries ...string) (*Graph, error) {
 		s.graph.Entries = append(s.graph.Entries, s.visit(entry, resolver.Resolved{Path: entry}, true))
 	}
 	s.wg.Wait()
-	if s.err != nil {
-		return nil, s.err
-	}
 	return s.graph, nil
 }
 
@@ -78,31 +75,30 @@ func (s *state) visit(key string, res resolver.Resolved, walkable bool) *Node {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		if err := s.scan(n); err != nil {
-			s.fail(err)
-		}
+		s.scan(n)
 	}()
 	return n
 }
 
-func (s *state) scan(n *Node) error {
+func (s *state) scan(n *Node) {
 	src, err := fs.ReadFile(s.walker.fs, n.Module.Path)
 	if err != nil {
-		return err
+		s.recordFailure(n, err)
+		return
 	}
 	mod, err := parser.Parse(src)
 	if err != nil {
-		return fmt.Errorf("%s: %w", n.Module.Path, err)
+		s.recordFailure(n, err)
+		return
 	}
 	mod.Path = n.Module.Path
 	n.Module = mod
 
 	for i := range mod.Imports {
 		if err := s.link(n, &mod.Imports[i]); err != nil {
-			return err
+			s.recordFailure(n, err)
 		}
 	}
-	return nil
 }
 
 func (s *state) link(n *Node, imp *parser.Import) error {
@@ -112,6 +108,9 @@ func (s *state) link(n *Node, imp *parser.Import) error {
 	res, err := s.walker.resolver.Resolve(n.Module.Path, imp.From)
 	if err != nil {
 		return err
+	}
+	if !s.walker.IncludeAssets && isAsset(res.Path) {
+		return nil
 	}
 	key := res.Path
 	if key == "" {
@@ -126,10 +125,22 @@ func (s *state) link(n *Node, imp *parser.Import) error {
 	return nil
 }
 
-func (s *state) fail(err error) {
-	s.errMu.Lock()
-	if s.err == nil {
-		s.err = err
-	}
-	s.errMu.Unlock()
+func (s *state) recordFailure(n *Node, err error) {
+	n.Failed = true
+	s.failMu.Lock()
+	s.graph.Failures = append(s.graph.Failures, Failure{Path: n.Module.Path, Err: err.Error()})
+	s.failMu.Unlock()
+}
+
+var assetExtensions = map[string]bool{
+	".css": true, ".scss": true, ".sass": true, ".less": true,
+	".svg": true, ".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".webp": true, ".avif": true, ".ico": true, ".bmp": true,
+	".woff": true, ".woff2": true, ".ttf": true, ".eot": true, ".otf": true,
+	".mp4": true, ".webm": true, ".mp3": true, ".wav": true,
+	".pdf": true, ".docx": true, ".xlsx": true, ".csv": true,
+}
+
+func isAsset(p string) bool {
+	return assetExtensions[strings.ToLower(path.Ext(p))]
 }

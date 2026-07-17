@@ -11,6 +11,7 @@ func TestResolvePkgEntry(t *testing.T) {
 		name      string
 		fsys      fstest.MapFS
 		specifier string
+		typeAware bool
 		want      string
 		wantErr   error
 	}{
@@ -91,12 +92,22 @@ func TestResolvePkgEntry(t *testing.T) {
 			want:      "node_modules/foo/esm/index.js",
 		},
 		{
-			name: "exports types condition wins for type-aware resolution",
+			name: "exports import condition wins for runtime resolution",
+			fsys: fstest.MapFS{
+				"node_modules/foo/package.json": {Data: []byte(`{"exports":{"types":"./index.d.ts","import":"./index.js"}}`)},
+				"node_modules/foo/index.js":     {},
+			},
+			specifier: "foo",
+			want:      "node_modules/foo/index.js",
+		},
+		{
+			name: "exports types condition wins in type-aware mode",
 			fsys: fstest.MapFS{
 				"node_modules/foo/package.json": {Data: []byte(`{"exports":{"types":"./index.d.ts","import":"./index.js"}}`)},
 				"node_modules/foo/index.d.ts":   {},
 			},
 			specifier: "foo",
+			typeAware: true,
 			want:      "node_modules/foo/index.d.ts",
 		},
 		{
@@ -154,6 +165,15 @@ func TestResolvePkgEntry(t *testing.T) {
 			want:      "node_modules/foo/src/utils/a/b/c.js",
 		},
 		{
+			name: "exports pattern with two wildcards in target substitutes every star",
+			fsys: fstest.MapFS{
+				"node_modules/foo/package.json":                      {Data: []byte(`{"exports":{"./react/*":{"types":"./dist/generated/react/*/*.d.ts"}}}`)},
+				"node_modules/foo/dist/generated/react/dts/dts.d.ts": {},
+			},
+			specifier: "foo/react/dts",
+			want:      "node_modules/foo/dist/generated/react/dts/dts.d.ts",
+		},
+		{
 			name: "scoped package with exports",
 			fsys: fstest.MapFS{
 				"node_modules/@scope/pkg/package.json": {Data: []byte(`{"exports":"./index.js"}`)},
@@ -193,6 +213,7 @@ func TestResolvePkgEntry(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := New(tt.fsys, nil)
+			r.IncludeTypes = tt.typeAware
 			got, err := r.resolvePkgEntry(tt.specifier)
 
 			if tt.wantErr != nil {
