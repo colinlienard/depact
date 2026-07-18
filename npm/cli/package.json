@@ -1,6 +1,6 @@
 {
   "name": "@depact/cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Dependency impact analyzer for large TypeScript codebases",
   "keywords": [
     "typescript",
@@ -25,10 +25,10 @@
     "bin/depact.js"
   ],
   "optionalDependencies": {
-    "@depact/cli-darwin-arm64": "0.0.1",
-    "@depact/cli-darwin-x64": "0.0.1",
-    "@depact/cli-linux-x64": "0.0.1",
-    "@depact/cli-linux-arm64": "0.0.1",
-    "@depact/cli-windows-x64": "0.0.1"
+    "@depact/cli-darwin-arm64": "0.0.2",
+    "@depact/cli-darwin-x64": "0.0.2",
+    "@depact/cli-linux-x64": "0.0.2",
+    "@depact/cli-linux-arm64": "0.0.2",
+    "@depact/cli-windows-x64": "0.0.2"
   }
 }
