@@ -34,6 +34,10 @@ func runWhy(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "depact: %v\n", err)
 		return 1
 	}
+	if len(norm) != 2 {
+		fmt.Fprintln(stderr, "why takes a single entry and target file, not glob patterns")
+		return 2
+	}
 	p, err := flags.load(fsys, tsconfig)
 	if err != nil {
 		fmt.Fprintf(stderr, "depact: %v\n", err)

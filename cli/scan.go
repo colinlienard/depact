@@ -181,10 +181,10 @@ func writeDetail(w io.Writer, r scanReport, top int, st style) {
 	e := r.Entries[0]
 	fmt.Fprintf(w, "%s\n", st.bold(e.Path))
 	fmt.Fprintf(w, "  %s modules  %s\n\n", st.num(e.Modules),
-		st.dim(fmt.Sprintf("(%d internal, %d external — not expanded; --follow-externals to walk them)", e.Modules-e.Externals, e.Externals)))
+		st.dim(fmt.Sprintf("%d internal, %d external (not expanded, --follow-externals to walk them)", e.Modules-e.Externals, e.Externals)))
 
-	fmt.Fprintf(w, "%s  %s\n", st.bold("top contributors"),
-		st.dim(fmt.Sprintf("— heaviest of this file's %d imports (exclusive reclaimed / total subtree)", len(e.Contributors))))
+	fmt.Fprintf(w, "%s  %s\n", st.bold("Top contributors"),
+		st.dim(fmt.Sprintf("heaviest of this file's %d imports (exclusive reclaimed / total subtree)", len(e.Contributors))))
 	if len(e.Contributors) == 0 {
 		fmt.Fprintln(w, st.dim("  (none)"))
 	}
@@ -193,7 +193,7 @@ func writeDetail(w io.Writer, r scanReport, top int, st style) {
 		shown = shown[:top]
 	}
 	for _, c := range shown {
-		nums := fmt.Sprintf("%s / %s", st.cyan(fmt.Sprintf("%4d", c.Exclusive)), st.dim(fmt.Sprintf("%-4d", c.Subtree)))
+		nums := fmt.Sprintf("%s / %s", st.cyan(fmt.Sprintf("%-4d", c.Exclusive)), st.dim(fmt.Sprintf("%-4d", c.Subtree)))
 		fmt.Fprintf(w, "  %s  %s%s\n", nums, c.Path, ownedTag(c, st))
 	}
 	if len(e.Contributors) > len(shown) {
@@ -215,13 +215,13 @@ func writeSummary(w io.Writer, r scanReport, top int, st style) {
 	fmt.Fprintf(w, "closure size   min %s   median %s   p90 %s   max %s\n",
 		st.num(sizes[0]), st.num(percentile(sizes, 50)), st.num(percentile(sizes, 90)), st.num(sizes[len(sizes)-1]))
 
-	fmt.Fprintf(w, "\n%s\n", st.bold("heaviest entries"))
+	fmt.Fprintf(w, "\n%s\n", st.bold("Heaviest entries"))
 	shown := r.Entries
 	if len(shown) > top {
 		shown = shown[:top]
 	}
 	for _, e := range shown {
-		fmt.Fprintf(w, "  %s  %s\n", st.cyan(fmt.Sprintf("%5d", e.Modules)), e.Path)
+		fmt.Fprintf(w, "  %s  %s\n", st.cyan(fmt.Sprintf("%-5d", e.Modules)), e.Path)
 	}
 	if len(r.Entries) > len(shown) {
 		fmt.Fprintf(w, "  %s\n", st.dim(fmt.Sprintf("... and %d more (--top to adjust)", len(r.Entries)-len(shown))))
@@ -235,7 +235,7 @@ func writeFailures(w io.Writer, failures []failureInfo, top int, st style) {
 	if len(failures) == 0 {
 		return
 	}
-	fmt.Fprintf(w, "\n%s\n", st.red(fmt.Sprintf("unreadable (%d, skipped)", len(failures))))
+	fmt.Fprintf(w, "\n%s\n", st.red(fmt.Sprintf("Unreadable (%d, skipped)", len(failures))))
 	shown := failures
 	if len(shown) > top {
 		shown = shown[:top]
@@ -250,20 +250,16 @@ func writeFailures(w io.Writer, failures []failureInfo, top int, st style) {
 
 func writeBarrels(w io.Writer, barrels []barrelInfo, top int, st style) {
 	var wasteful []barrelInfo
-	noWaste, unprovable := 0, 0
+	totalWasted := 0
 	for _, b := range barrels {
-		switch {
-		case b.Wasted > 0:
+		if b.Wasted > 0 {
 			wasteful = append(wasteful, b)
-		case b.Unprovable:
-			unprovable++
-		default:
-			noWaste++
+			totalWasted += b.Wasted
 		}
 	}
 
-	fmt.Fprintf(w, "\n%s  %s\n", st.bold("barrels"),
-		st.dim(fmt.Sprintf("(%d with waste of %d)", len(wasteful), len(barrels))))
+	fmt.Fprintf(w, "\n%s  %s\n", st.bold("Barrels"),
+		st.dim(fmt.Sprintf("%d files with %d wasted imports", len(wasteful), totalWasted)))
 	if len(barrels) == 0 {
 		fmt.Fprintln(w, st.dim("  (none)"))
 		return
@@ -275,25 +271,16 @@ func writeBarrels(w io.Writer, barrels []barrelInfo, top int, st style) {
 	}
 	for _, b := range shown {
 		fmt.Fprintf(w, "  %s\n", b.Path)
-		meta := fmt.Sprintf("%d/%d re-exports used  importers %d  deps %d", b.UsedTargets, b.Reexports, b.Importers, b.Deps)
-		fmt.Fprintf(w, "    %s wasted   %s\n", st.cyan(fmt.Sprintf("%d", b.Wasted)), st.dim(meta))
+		tail := fmt.Sprintf("%d/%d unused re-exports", b.Reexports-b.UsedTargets, b.Reexports)
 		if len(b.WastedTargets) > 0 {
-			fmt.Fprintf(w, "    %s %s\n", st.dim("wasted →"), st.dim(joinTargets(b.WastedTargets, 4)))
+			tail += " → " + joinTargets(b.WastedTargets, top)
 		}
+		fmt.Fprintf(w, "    %s / %s modules wasted, %s\n",
+			st.cyan(fmt.Sprintf("%d", b.Wasted)), st.dim(fmt.Sprintf("%d", b.Deps)), st.dim(tail))
 	}
 
-	var notes []string
 	if len(wasteful) > len(shown) {
-		notes = append(notes, fmt.Sprintf("%d more with waste", len(wasteful)-len(shown)))
-	}
-	if noWaste > 0 {
-		notes = append(notes, fmt.Sprintf("%d with no measurable waste", noWaste))
-	}
-	if unprovable > 0 {
-		notes = append(notes, fmt.Sprintf("%d unprovable (namespace/side-effect)", unprovable))
-	}
-	if len(notes) > 0 {
-		fmt.Fprintf(w, "  %s\n", st.dim(strings.Join(notes, ", ")))
+		fmt.Fprintf(w, "  %s\n", st.dim(fmt.Sprintf("... and %d more with waste", len(wasteful)-len(shown))))
 	}
 }
 

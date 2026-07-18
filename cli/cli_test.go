@@ -362,11 +362,11 @@ func TestWriteBarrelsNoWaste(t *testing.T) {
 	var buf bytes.Buffer
 	writeBarrels(&buf, barrels, 20, style{})
 	text := buf.String()
-	if !strings.Contains(text, "0 with waste of 2") {
+	if !strings.Contains(text, "0 files with 0 wasted imports") {
 		t.Errorf("expected waste summary in header:\n%s", text)
 	}
-	if !strings.Contains(text, "1 with no measurable waste") || !strings.Contains(text, "1 unprovable") {
-		t.Errorf("expected no-waste and unprovable counts:\n%s", text)
+	if strings.Contains(text, "\n  a\n") || strings.Contains(text, "\n  b\n") {
+		t.Errorf("non-wasteful barrels must not be listed:\n%s", text)
 	}
 }
 
@@ -582,7 +582,7 @@ func TestRunScanSummaryText(t *testing.T) {
 		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
 	}
 	text := out.String()
-	for _, want := range []string{"3 entries", "heaviest entries", "closure size", "src/c.test.ts"} {
+	for _, want := range []string{"3 entries", "Heaviest entries", "closure size", "src/c.test.ts"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("summary missing %q:\n%s", want, text)
 		}
