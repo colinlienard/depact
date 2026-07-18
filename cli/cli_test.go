@@ -64,7 +64,7 @@ func TestLocateWithProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tgt.root != "fixtures/barrel" || tgt.tsconfig != "tsconfig.json" || !reflect.DeepEqual(tgt.args, []string{"src/entry.ts"}) {
+	if tgt.root != filepath.FromSlash("fixtures/barrel") || tgt.tsconfig != "tsconfig.json" || !reflect.DeepEqual(tgt.args, []string{"src/entry.ts"}) {
 		t.Errorf("got root=%q tsconfig=%q args=%v", tgt.root, tgt.tsconfig, tgt.args)
 	}
 }
@@ -127,7 +127,7 @@ func TestLocateGlobPrefixRoot(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "tsconfig.json"), "{}")
 	mustWrite(t, filepath.Join(dir, "src", "a.test.ts"), "export const a = 1")
 
-	pattern := filepath.Join(dir, "src", "**", "*.test.ts")
+	pattern := filepath.ToSlash(dir) + "/src/**/*.test.ts"
 	tgt, err := locate("", []string{pattern})
 	if err != nil {
 		t.Fatal(err)
