@@ -473,7 +473,7 @@ func (s *scanner) skipSpaceAndComments() {
 			}
 		case char == '/' && s.peekAt(1) == '*':
 			s.i += 2
-			for s.i < len(s.src) && !(s.peek() == '*' && s.peekAt(1) == '/') {
+			for s.i < len(s.src) && (s.peek() != '*' || s.peekAt(1) != '/') {
 				s.i++
 			}
 			s.i += 2
@@ -583,10 +583,7 @@ func (s *scanner) readString() (string, error) {
 	quote := s.peek()
 	s.i++
 	start := s.i
-	for {
-		if s.peek() == quote {
-			break
-		}
+	for s.peek() != quote {
 		if s.peek() == 0 {
 			return "", fmt.Errorf("expected closing quote, got EOF")
 		}
