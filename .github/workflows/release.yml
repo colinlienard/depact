@@ -23,7 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          token: ${{ secrets.GH_ACCESS_TOKEN }}
           fetch-depth: 0 # Fetch all history for tags
 
       - name: Setup Go
@@ -71,8 +70,6 @@ jobs:
           done
           echo "publishing npm/cli"
           npm publish npm/cli --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
