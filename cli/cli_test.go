@@ -297,6 +297,26 @@ func TestBuildReportExternals(t *testing.T) {
 	}
 }
 
+func TestBuildReportExternalImports(t *testing.T) {
+	g := graph(t, fstest.MapFS{
+		"src/entry.ts":                         {Data: []byte("import 'acme'\nimport '@scope/one'\nimport './a'")},
+		"src/a.ts":                             {Data: []byte("import 'acme'")},
+		"node_modules/acme/package.json":       {Data: []byte(`{"main":"index.js"}`)},
+		"node_modules/acme/index.js":           {Data: []byte("module.exports = 1")},
+		"node_modules/@scope/one/package.json": {Data: []byte(`{"main":"index.js"}`)},
+		"node_modules/@scope/one/index.js":     {Data: []byte("module.exports = 1")},
+	}, "src/entry.ts")
+
+	r := buildReport(g)
+	want := []externalImport{
+		{Specifier: "acme", Scope: "", Importers: 2},
+		{Specifier: "@scope/one", Scope: "@scope", Importers: 1},
+	}
+	if !reflect.DeepEqual(r.Externals, want) {
+		t.Errorf("externals = %+v, want %+v", r.Externals, want)
+	}
+}
+
 func TestBuildReportSharedByAllExcludesEntries(t *testing.T) {
 	// a.test imports b.test (also an entry) plus shared; b.test imports shared.
 	// shared is reachable from every entry, b.test is too, but entry nodes are
