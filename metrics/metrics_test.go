@@ -93,6 +93,34 @@ func TestExclusivePerEntry(t *testing.T) {
 	}
 }
 
+func TestContributors(t *testing.T) {
+	// entry directly imports big (owns b1,b2) and shared; small is transitive
+	// (via big) so it must NOT appear as a contributor.
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":  file("import './big'\nimport './shared'"),
+		"src/big.ts":    file("import './b1'\nimport './b2'\nimport './shared'"),
+		"src/b1.ts":     file(`export const b1 = 1`),
+		"src/b2.ts":     file(`export const b2 = 1`),
+		"src/shared.ts": file(`export const s = 1`),
+	}, "src/entry.ts")
+
+	got := Contributors(g.Entries[0])
+	// big: subtree = big,b1,b2,shared = 4; exclusive = big,b1,b2 = 3 (shared kept by entry's own import)
+	// shared: subtree = 1; exclusive = 0 (also reachable via big)
+	want := map[string]Contributor{
+		"src/big.ts":    {Path: "src/big.ts", Exclusive: 3, Subtree: 4},
+		"src/shared.ts": {Path: "src/shared.ts", Exclusive: 0, Subtree: 1},
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 direct contributors, got %+v", got)
+	}
+	for _, c := range got {
+		if want[c.Path] != c {
+			t.Errorf("contributor %s = %+v, want %+v", c.Path, c, want[c.Path])
+		}
+	}
+}
+
 func TestWhyShortestPath(t *testing.T) {
 	// Two routes to target: entry -> long1 -> long2 -> target, entry -> short -> target.
 	g := walk(t, fstest.MapFS{
@@ -159,6 +187,120 @@ func TestBarrelsNamespaceImport(t *testing.T) {
 	b := Barrels(g)["src/ui/index.ts"]
 	if b == nil || !b.Namespace || b.Symbols != 0 {
 		t.Errorf("expected namespace barrel with 0 named symbols, got %+v", b)
+	}
+	if !b.Unprovable || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("namespace import must make waste unprovable, got %+v", b)
+	}
+}
+
+// entryA uses Alpha, entryB uses Beta; Gamma and Delta (aliased DeltaX) are
+// re-exported but never imported anywhere. Alpha/Gamma share `shared`, so the
+// exclusive waste must exclude `shared` (kept alive by used Alpha).
+func wasteGraph(t *testing.T, entries ...string) *walker.Graph {
+	t.Helper()
+	return walk(t, fstest.MapFS{
+		"src/entryA.ts": file(`import { Alpha } from './ui'`),
+		"src/entryB.ts": file(`import { Beta } from './ui'`),
+		"src/ui/index.ts": file("export { Alpha } from './alpha'\n" +
+			"export { Beta } from './beta'\n" +
+			"export { Gamma } from './gamma'\n" +
+			"export { Delta as DeltaX } from './delta'"),
+		"src/ui/alpha.ts":  file("import './shared'\nexport const Alpha = 1"),
+		"src/ui/beta.ts":   file("import './shared'\nexport const Beta = 1"),
+		"src/ui/gamma.ts":  file("import './shared'\nimport './gdep1'\nexport const Gamma = 1"),
+		"src/ui/gdep1.ts":  file("import './gdep2'\nexport const g1 = 1"),
+		"src/ui/gdep2.ts":  file(`export const g2 = 1`),
+		"src/ui/delta.ts":  file("import './ddep'\nexport const Delta = 1"),
+		"src/ui/ddep.ts":   file(`export const dd = 1`),
+		"src/ui/shared.ts": file(`export const s = 1`),
+	}, entries...)
+}
+
+func TestBarrelWaste(t *testing.T) {
+	b := Barrels(wasteGraph(t, "src/entryA.ts", "src/entryB.ts"))["src/ui/index.ts"]
+	if b == nil {
+		t.Fatal("expected barrel src/ui/index.ts")
+	}
+	if b.Reexports != 4 || b.UsedTargets != 2 {
+		t.Errorf("expected reexports=4 usedTargets=2, got reexports=%d usedTargets=%d", b.Reexports, b.UsedTargets)
+	}
+	// wasted = gamma, gdep1, gdep2, delta, ddep (shared excluded, kept by alpha)
+	if b.Wasted != 5 {
+		t.Errorf("expected wasted=5, got %d", b.Wasted)
+	}
+	want := []string{"src/ui/gamma.ts", "src/ui/delta.ts"}
+	if !reflect.DeepEqual(b.WastedTargets, want) {
+		t.Errorf("wastedTargets = %v, want %v", b.WastedTargets, want)
+	}
+}
+
+// Walking only entryA leaves Beta unused too, so it becomes wasted — proving
+// usage is measured across the whole graph, not per-entry.
+func TestBarrelWasteSingleEntry(t *testing.T) {
+	b := Barrels(wasteGraph(t, "src/entryA.ts"))["src/ui/index.ts"]
+	if b.UsedTargets != 1 {
+		t.Errorf("expected usedTargets=1, got %d", b.UsedTargets)
+	}
+	// wasted now adds beta: beta, gamma, gdep1, gdep2, delta, ddep (shared kept by alpha)
+	if b.Wasted != 6 {
+		t.Errorf("expected wasted=6, got %d", b.Wasted)
+	}
+	want := []string{"src/ui/gamma.ts", "src/ui/beta.ts", "src/ui/delta.ts"}
+	if !reflect.DeepEqual(b.WastedTargets, want) {
+		t.Errorf("wastedTargets = %v, want %v", b.WastedTargets, want)
+	}
+}
+
+// `export *` targets can't be attributed by name in phase 1, so they fail open
+// (assumed used) and never count as waste.
+func TestBarrelWasteStarFailsOpen(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { A } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * from './b'"),
+		"src/a.ts":        file(`export const A = 1`),
+		"src/b.ts":        file("import './bdep'\nexport const B = 1"),
+		"src/bdep.ts":     file(`export const d = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b.Reexports != 2 || b.UsedTargets != 2 || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("star re-export must fail open, got %+v", b)
+	}
+}
+
+// A re-export target the barrel also imports for its own local export is used
+// by the barrel's own code, so it is never wasted even if no importer names it.
+func TestBarrelWasteLocalImport(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts": file(`import { combined } from './ui'`),
+		"src/ui/index.ts": file("import { a } from './a'\nimport { b } from './b'\n" +
+			"export { a } from './a'\nexport { b } from './b'\n" +
+			"export const combined = { ...a, ...b }"),
+		"src/ui/a.ts":    file("import './adep'\nexport const a = 1"),
+		"src/ui/b.ts":    file(`export const b = 1`),
+		"src/ui/adep.ts": file(`export const d = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("locally-imported re-exports must not be wasted, got %+v", b)
+	}
+	if b.UsedTargets != 2 {
+		t.Errorf("expected both targets kept as used, got usedTargets=%d", b.UsedTargets)
+	}
+}
+
+// A side-effect import runs the whole barrel, so waste is unprovable.
+func TestBarrelWasteSideEffectImport(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import './ui'`),
+		"src/ui/index.ts": file(`export { A } from './a'`),
+		"src/a.ts":        file(`export const A = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil || !b.Unprovable || b.Wasted != 0 {
+		t.Errorf("side-effect import must make waste unprovable, got %+v", b)
 	}
 }
 

@@ -241,13 +241,13 @@ func TestBuildReport(t *testing.T) {
 	if r.Union.Modules != 5 || r.Union.Externals != 0 {
 		t.Errorf("union = %+v, want 5 modules 0 externals", r.Union)
 	}
-	// exclusive must be sorted by cost descending; ui owns Button+Card = 3
-	if len(e.Exclusive) == 0 || e.Exclusive[0].Path != "src/ui/index.ts" || e.Exclusive[0].Cost != 3 {
-		t.Errorf("top contributor = %+v, want src/ui/index.ts cost 3", e.Exclusive)
+	if len(e.Contributors) == 0 || e.Contributors[0].Path != "src/ui/index.ts" ||
+		e.Contributors[0].Exclusive != 3 || e.Contributors[0].Subtree != 3 {
+		t.Errorf("top contributor = %+v, want src/ui/index.ts exclusive 3 subtree 3", e.Contributors)
 	}
-	for i := 1; i < len(e.Exclusive); i++ {
-		if e.Exclusive[i-1].Cost < e.Exclusive[i].Cost {
-			t.Errorf("exclusive not sorted descending: %+v", e.Exclusive)
+	for i := 1; i < len(e.Contributors); i++ {
+		if e.Contributors[i-1].Exclusive < e.Contributors[i].Exclusive {
+			t.Errorf("contributors not sorted by exclusive descending: %+v", e.Contributors)
 		}
 	}
 	if len(r.Barrels) != 1 || r.Barrels[0].Path != "src/ui/index.ts" || r.Barrels[0].Deps != 2 {
@@ -275,8 +275,8 @@ func TestBuildReportMultiEntry(t *testing.T) {
 	if r.Entries[1].Path != "src/a.test.ts" || r.Entries[1].Modules != 1 {
 		t.Errorf("lightest = %+v, want src/a.test.ts with 1 module", r.Entries[1])
 	}
-	if r.Entries[0].Exclusive != nil || r.Entries[1].Exclusive != nil {
-		t.Errorf("expected no exclusive lists in multi-entry report")
+	if r.Entries[0].Contributors != nil || r.Entries[1].Contributors != nil {
+		t.Errorf("expected no contributor lists in multi-entry report")
 	}
 	if r.Union.Modules != 4 || r.Union.SharedByAll != 1 {
 		t.Errorf("union = %+v, want 4 modules, 1 shared by all", r.Union)
@@ -336,21 +336,37 @@ func TestPercentile(t *testing.T) {
 
 func TestWriteBarrelsTop(t *testing.T) {
 	barrels := []barrelInfo{
-		{Path: "a", Deps: 3},
-		{Path: "b", Deps: 2},
-		{Path: "c", Deps: 1},
+		{Path: "a", Wasted: 3, Reexports: 2, UsedTargets: 1},
+		{Path: "b", Wasted: 2, Reexports: 2, UsedTargets: 1},
+		{Path: "c", Wasted: 1, Reexports: 2, UsedTargets: 1},
 	}
 	var buf bytes.Buffer
-	writeBarrels(&buf, barrels, 2)
+	writeBarrels(&buf, barrels, 2, style{})
 	text := buf.String()
-	if !strings.Contains(text, "a") || !strings.Contains(text, "b") {
+	if !strings.Contains(text, "\n  a\n") || !strings.Contains(text, "\n  b\n") {
 		t.Errorf("expected top-2 barrels shown:\n%s", text)
 	}
 	if strings.Contains(text, "\n  c\n") {
 		t.Errorf("expected barrel c truncated:\n%s", text)
 	}
-	if !strings.Contains(text, "... and 1 more") {
+	if !strings.Contains(text, "1 more with waste") {
 		t.Errorf("expected truncation notice:\n%s", text)
+	}
+}
+
+func TestWriteBarrelsNoWaste(t *testing.T) {
+	barrels := []barrelInfo{
+		{Path: "a", Deps: 3},
+		{Path: "b", Unprovable: true},
+	}
+	var buf bytes.Buffer
+	writeBarrels(&buf, barrels, 20, style{})
+	text := buf.String()
+	if !strings.Contains(text, "0 with waste of 2") {
+		t.Errorf("expected waste summary in header:\n%s", text)
+	}
+	if !strings.Contains(text, "1 with no measurable waste") || !strings.Contains(text, "1 unprovable") {
+		t.Errorf("expected no-waste and unprovable counts:\n%s", text)
 	}
 }
 
@@ -371,43 +387,132 @@ func TestRunNoArgs(t *testing.T) {
 	}
 }
 
-func TestRunAnalyzeFixtureJSON(t *testing.T) {
+func TestRunVersion(t *testing.T) {
+	for _, arg := range []string{"version", "-v", "--version"} {
+		var out, errBuf bytes.Buffer
+		if code := Run([]string{arg}, &out, &errBuf); code != 0 {
+			t.Errorf("%s: exit code = %d, want 0", arg, code)
+		}
+		if strings.TrimSpace(out.String()) != Version {
+			t.Errorf("%s: out = %q, want %q", arg, out.String(), Version)
+		}
+	}
+}
+
+func TestRunWhyChain(t *testing.T) {
+	t.Chdir("..")
+	var out, errBuf bytes.Buffer
+	code := Run([]string{
+		"why", "src/entry.ts", "src/d.ts",
+		"--project", "fixtures/linear/tsconfig.json", "--json",
+	}, &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
+	}
+	var r whyReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	want := []string{"src/entry.ts", "src/b.ts", "src/c.ts", "src/d.ts"}
+	if !r.Found || !reflect.DeepEqual(r.Chain, want) {
+		t.Errorf("chain = %+v, want %v", r, want)
+	}
+}
+
+func TestRunWhyNoPath(t *testing.T) {
+	t.Chdir("..")
+	var out, errBuf bytes.Buffer
+	code := Run([]string{
+		"why", "src/d.ts", "src/entry.ts",
+		"--project", "fixtures/linear/tsconfig.json", "--json",
+	}, &out, &errBuf)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr = %q", code, errBuf.String())
+	}
+	var r whyReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	if r.Found || r.Chain != nil {
+		t.Errorf("expected no path, got %+v", r)
+	}
+}
+
+func TestRunWhyArgCount(t *testing.T) {
+	var out, errBuf bytes.Buffer
+	if code := Run([]string{"why", "only-one.ts"}, &out, &errBuf); code != 2 {
+		t.Errorf("exit code = %d, want 2", code)
+	}
+}
+
+func TestRunScanFixtureJSON(t *testing.T) {
 	t.Chdir("..") // run from repo root so fixtures resolve under os.DirFS(".")
 	var out, errBuf bytes.Buffer
 	// entry is relative to the project root (dir of --project).
 	code := Run([]string{
-		"analyze", "src/entry.ts",
+		"scan", "src/entry.ts",
 		"--project", "fixtures/barrel/tsconfig.json", "--json",
 	}, &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
 	}
-	var r analyzeReport
+	var r scanReport
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("invalid json: %v\n%s", err, out.String())
 	}
 	if len(r.Entries) != 1 || r.Entries[0].Path != "src/entry.ts" || r.Entries[0].Modules == 0 {
 		t.Errorf("unexpected report: %+v", r)
 	}
-	if len(r.Entries[0].Exclusive) == 0 {
+	if len(r.Entries[0].Contributors) == 0 {
 		t.Errorf("expected exclusive list for single entry, got %+v", r.Entries[0])
 	}
 }
 
-func TestRunAnalyzeExternalsFixture(t *testing.T) {
+func TestRunScanWasteFixtureJSON(t *testing.T) {
+	t.Chdir("..")
+	var out, errBuf bytes.Buffer
+	code := Run([]string{
+		"scan", "src/entry.ts",
+		"--project", "fixtures/waste/tsconfig.json", "--json",
+	}, &out, &errBuf)
+	if code != 0 {
+		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
+	}
+	var r scanReport
+	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
+		t.Fatalf("invalid json: %v\n%s", err, out.String())
+	}
+	var barrel *barrelInfo
+	for i := range r.Barrels {
+		if r.Barrels[i].Path == "src/ui/index.ts" {
+			barrel = &r.Barrels[i]
+		}
+	}
+	if barrel == nil {
+		t.Fatalf("expected barrel src/ui/index.ts, got %+v", r.Barrels)
+	}
+	if barrel.Reexports != 4 || barrel.UsedTargets != 1 || barrel.Wasted != 6 {
+		t.Errorf("expected reexports=4 usedTargets=1 wasted=6, got %+v", barrel)
+	}
+	if len(barrel.WastedTargets) != 3 || barrel.WastedTargets[0] != "src/ui/gamma.ts" {
+		t.Errorf("unexpected wastedTargets: %v", barrel.WastedTargets)
+	}
+}
+
+func TestRunScanExternalsFixture(t *testing.T) {
 	t.Chdir("..")
 	var out, errBuf bytes.Buffer
 	// --follow-externals walks into node_modules, which resolves against the
 	// project root (fixtures/externals), so acme/leftpad count as externals.
 	code := Run([]string{
-		"analyze", "src/entry.ts",
+		"scan", "src/entry.ts",
 		"--project", "fixtures/externals/tsconfig.json",
 		"--follow-externals", "--json",
 	}, &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
 	}
-	var r analyzeReport
+	var r scanReport
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("invalid json: %v\n%s", err, out.String())
 	}
@@ -416,16 +521,16 @@ func TestRunAnalyzeExternalsFixture(t *testing.T) {
 	}
 }
 
-func TestRunAnalyzeAutoRoot(t *testing.T) {
+func TestRunScanAutoRoot(t *testing.T) {
 	t.Chdir("..")
 	var out, errBuf bytes.Buffer
 	// no --project: depact roots at this repository (nearest .git), so the entry
 	// key is repo-relative and its nearest tsconfig still governs resolution.
-	code := Run([]string{"analyze", "fixtures/barrel/src/entry.ts", "--json"}, &out, &errBuf)
+	code := Run([]string{"scan", "fixtures/barrel/src/entry.ts", "--json"}, &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
 	}
-	var r analyzeReport
+	var r scanReport
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("invalid json: %v\n%s", err, out.String())
 	}
@@ -434,19 +539,19 @@ func TestRunAnalyzeAutoRoot(t *testing.T) {
 	}
 }
 
-func TestRunAnalyzeGlobSummary(t *testing.T) {
+func TestRunScanGlobSummary(t *testing.T) {
 	t.Chdir("..")
 	var out, errBuf bytes.Buffer
 	// a quoted pattern reaches depact unexpanded; it expands against the
 	// project root and the multi-entry run prints a summary.
 	code := Run([]string{
-		"analyze", "src/**/*.test.ts",
+		"scan", "src/**/*.test.ts",
 		"--project", "fixtures/multi/tsconfig.json", "--json",
 	}, &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
 	}
-	var r analyzeReport
+	var r scanReport
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("invalid json: %v\n%s", err, out.String())
 	}
@@ -460,17 +565,17 @@ func TestRunAnalyzeGlobSummary(t *testing.T) {
 		t.Errorf("union = %+v, want 6 modules, 1 shared by all", r.Union)
 	}
 	for _, e := range r.Entries {
-		if e.Exclusive != nil {
+		if e.Contributors != nil {
 			t.Errorf("expected no exclusive list in summary, got %+v", e)
 		}
 	}
 }
 
-func TestRunAnalyzeSummaryText(t *testing.T) {
+func TestRunScanSummaryText(t *testing.T) {
 	t.Chdir("..")
 	var out, errBuf bytes.Buffer
 	code := Run([]string{
-		"analyze", "src/**/*.test.ts",
+		"scan", "src/**/*.test.ts",
 		"--project", "fixtures/multi/tsconfig.json",
 	}, &out, &errBuf)
 	if code != 0 {
@@ -484,18 +589,18 @@ func TestRunAnalyzeSummaryText(t *testing.T) {
 	}
 }
 
-func TestRunAnalyzeMissingEntry(t *testing.T) {
+func TestRunScanMissingEntry(t *testing.T) {
 	var out, errBuf bytes.Buffer
-	if code := Run([]string{"analyze"}, &out, &errBuf); code != 2 {
+	if code := Run([]string{"scan"}, &out, &errBuf); code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
 }
 
-func TestRunAnalyzeNegativeTop(t *testing.T) {
+func TestRunScanNegativeTop(t *testing.T) {
 	t.Chdir("..")
 	var out, errBuf bytes.Buffer
 	code := Run([]string{
-		"analyze", "src/entry.ts",
+		"scan", "src/entry.ts",
 		"--project", "fixtures/barrel/tsconfig.json", "--top", "-1",
 	}, &out, &errBuf)
 	if code != 0 {
@@ -503,18 +608,18 @@ func TestRunAnalyzeNegativeTop(t *testing.T) {
 	}
 }
 
-func TestRunAnalyzeDashDashEntry(t *testing.T) {
+func TestRunScanDashDashEntry(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "tsconfig.json"), "{}")
 	mustWrite(t, filepath.Join(dir, "-weird.ts"), "export const x = 1")
 	t.Chdir(dir)
 
 	var out, errBuf bytes.Buffer
-	code := Run([]string{"analyze", "--json", "--", "-weird.ts"}, &out, &errBuf)
+	code := Run([]string{"scan", "--json", "--", "-weird.ts"}, &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("exit code = %d, stderr = %q", code, errBuf.String())
 	}
-	var r analyzeReport
+	var r scanReport
 	if err := json.Unmarshal(out.Bytes(), &r); err != nil {
 		t.Fatalf("invalid json: %v\n%s", err, out.String())
 	}
