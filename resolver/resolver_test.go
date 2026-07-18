@@ -3,6 +3,7 @@ package resolver
 import (
 	"io/fs"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -406,6 +407,89 @@ func TestResolverWorkspaceLink(t *testing.T) {
 		})
 	}
 }
+
+func TestResolverDirEntriesSymlink(t *testing.T) {
+	tests := []struct {
+		name      string
+		fsys      fstest.MapFS
+		specifier string
+		expected  Resolved
+	}{
+		{
+			name: "symlinked file resolves as a file",
+			fsys: fstest.MapFS{
+				"src/entry.ts": {},
+				"src/mod.ts":   {Mode: fs.ModeSymlink, Data: []byte("real.ts")},
+				"src/real.ts":  {},
+			},
+			specifier: "./mod",
+			expected:  Resolved{Path: "src/mod.ts"},
+		},
+		{
+			name: "symlinked directory is skipped in favor of index",
+			fsys: fstest.MapFS{
+				"src/entry.ts":     {},
+				"src/mod":          {Mode: fs.ModeSymlink | fs.ModeDir},
+				"src/mod/index.ts": {},
+			},
+			specifier: "./mod",
+			expected:  Resolved{Path: "src/mod/index.ts", Kind: ResolveKindIndex},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := New(tt.fsys, nil)
+			got, err := r.Resolve("src/entry.ts", tt.specifier)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.expected) {
+				t.Errorf("expected %+v, got %+v", tt.expected, got)
+			}
+		})
+	}
+}
+
+func TestResolverConcurrentDistinctKeys(t *testing.T) {
+	fsys := fstest.MapFS{
+		"src/entry.ts":                    {},
+		"node_modules/react/package.json": {Data: []byte(`{"main":"index.js"}`)},
+		"node_modules/react/index.js":     {},
+	}
+	const n = 200
+	for i := range n {
+		fsys[modName(i)] = &fstest.MapFile{}
+	}
+	r := New(fsys, nil)
+
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			got, err := r.Resolve("src/entry.ts", "./mod"+itoa(i))
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if want := (Resolved{Path: modName(i)}); !reflect.DeepEqual(got, want) {
+				t.Errorf("mod%d: expected %+v, got %+v", i, want, got)
+			}
+			pkg, err := r.Resolve("src/entry.ts", "react")
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+			if want := (Resolved{Path: "node_modules/react/index.js", Kind: ResolveKindPackage, External: true}); !reflect.DeepEqual(pkg, want) {
+				t.Errorf("react: expected %+v, got %+v", want, pkg)
+			}
+		})
+	}
+	wg.Wait()
+}
+
+func modName(i int) string { return "src/mod" + itoa(i) + ".ts" }
+
+func itoa(i int) string { return strconv.Itoa(i) }
 
 func TestResolverCache(t *testing.T) {
 	fsys := fstest.MapFS{
