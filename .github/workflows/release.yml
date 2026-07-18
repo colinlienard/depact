@@ -69,7 +69,7 @@ jobs:
             npm publish "$d" --access public --provenance
           done
           echo "publishing npm/cli"
-          npm publish npm/cli --access public --provenance
+          npm publish ./npm/cli --access public --provenance
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
