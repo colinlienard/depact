@@ -34,7 +34,7 @@ for t in "${targets[@]}"; do
   mkdir -p "$pkg/bin"
 
   GOOS=$GOOS GOARCH=$GOARCH CGO_ENABLED=0 \
-    go build -trimpath -ldflags "-s -w" -o "$pkg/bin/$BIN" .
+    go build -trimpath -ldflags "-s -w -X depact/cli.Version=$VERSION" -o "$pkg/bin/$BIN" .
 
   export VERSION NODE_OS NODE_CPU PKG_OS
   envsubst <npm/package.json.tmpl >"$pkg/package.json"

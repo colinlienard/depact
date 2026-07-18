@@ -14,16 +14,20 @@ import (
 	"depact/walker"
 )
 
+var Version = "dev"
+
 const usage = `depact - dependency impact analyzer
 
 usage:
   depact <command> [flags] <args>
 
 commands:
-  analyze <entry>...   report closure size, exclusive cost and barrels; with
+  scan <entry>...      report closure size, exclusive cost and barrels; with
                        several entries it prints a ranked summary instead.
                        Entries may be glob patterns ('src/**/*.test.{ts,tsx}',
                        quoted or not); node_modules and dot-dirs are pruned
+  why <entry> <target> print the shortest import chain from entry to target,
+                       explaining why target ends up in entry's closure
 
 flags (shared):
   --json               emit machine-readable JSON instead of text
@@ -38,7 +42,7 @@ flags (shared):
                        When omitted, depact roots at the enclosing repository
                        (nearest .git) and uses the nearest tsconfig above
                        the first entry, so you can point it straight at files:
-                       depact analyze path/to/index.ts
+                       depact scan path/to/index.ts
 `
 
 func Run(args []string, stdout, stderr io.Writer) int {
@@ -49,8 +53,13 @@ func Run(args []string, stdout, stderr io.Writer) int {
 
 	cmd, rest := args[0], args[1:]
 	switch cmd {
-	case "analyze":
-		return runAnalyze(rest, stdout, stderr)
+	case "scan":
+		return runScan(rest, stdout, stderr)
+	case "why":
+		return runWhy(rest, stdout, stderr)
+	case "version", "-v", "--version":
+		fmt.Fprintln(stdout, Version)
+		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -76,20 +85,24 @@ func (c *commonFlags) bind(fs *flag.FlagSet) {
 	fs.StringVar(&c.project, "project", "", "path to tsconfig.json")
 }
 
-func (c *commonFlags) build(args []string) (*walker.Graph, error) {
+func (c *commonFlags) prepare(args []string) (iofs.FS, string, []string, error) {
 	tgt, err := locate(c.project, args)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
 	fsys := os.DirFS(tgt.root)
 	entries, err := expand(fsys, tgt.args)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
 	tsconfig := tgt.tsconfig
 	if tsconfig == "" {
 		tsconfig = findTsconfigIn(fsys, path.Dir(entries[0]))
 	}
+	return fsys, tsconfig, entries, nil
+}
+
+func (c *commonFlags) load(fsys iofs.FS, tsconfig string) (*project.Project, error) {
 	p, err := project.Load(fsys, tsconfig)
 	if err != nil {
 		return nil, err
@@ -98,7 +111,18 @@ func (c *commonFlags) build(args []string) (*walker.Graph, error) {
 	p.Walker.SkipTypeOnly = !c.typeImports
 	p.Walker.IncludeAssets = c.assets
 	p.Resolver.IncludeTypes = c.typeImports
+	return p, nil
+}
 
+func (c *commonFlags) build(args []string) (*walker.Graph, error) {
+	fsys, tsconfig, entries, err := c.prepare(args)
+	if err != nil {
+		return nil, err
+	}
+	p, err := c.load(fsys, tsconfig)
+	if err != nil {
+		return nil, err
+	}
 	return p.Walker.Walk(entries...)
 }
 
