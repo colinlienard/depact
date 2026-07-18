@@ -5,6 +5,8 @@ cd "$(dirname "$0")"
 
 VERSION=$(node -p "require('./npm/cli/package.json').version")
 
+cp README.md LICENSE npm/cli/
+
 node -e '
   const fs = require("fs");
   const p = "npm/cli/package.json";

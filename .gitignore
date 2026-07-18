@@ -2,3 +2,5 @@
 depact
 node_modules
 npm/cli-*
+npm/cli/README.md
+npm/cli/LICENSE
