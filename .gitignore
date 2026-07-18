@@ -1,1 +1,4 @@
-/depact
+.DS_Store
+depact
+node_modules
+npm/cli-*

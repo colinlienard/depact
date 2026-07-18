@@ -1,0 +1,34 @@
+{
+  "name": "@depact/cli",
+  "version": "0.0.1",
+  "description": "Dependency impact analyzer for large TypeScript codebases",
+  "keywords": [
+    "typescript",
+    "analyzer",
+    "import",
+    "devtool",
+    "dependency"
+  ],
+  "homepage": "https://github.com/colinlienard/depact",
+  "bugs": {
+    "url": "https://github.com/colinlienard/depact/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/colinlienard/depact.git"
+  },
+  "bin": {
+    "depact": "bin/depact.js"
+  },
+  "files": [
+    "bin/depact.js"
+  ],
+  "optionalDependencies": {
+    "@depact/cli-darwin-arm64": "0.0.1",
+    "@depact/cli-darwin-x64": "0.0.1",
+    "@depact/cli-linux-x64": "0.0.1",
+    "@depact/cli-linux-arm64": "0.0.1",
+    "@depact/cli-windows-x64": "0.0.1"
+  }
+}

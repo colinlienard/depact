@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: "Release type (major, minor, patch)"
+        required: true
+        default: "minor"
+        type: choice
+        options:
+          - major
+          - minor
+          - patch
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.GH_ACCESS_TOKEN }}
+          fetch-depth: 0 # Fetch all history for tags
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24.18.0
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Configure Git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config --global push.followTags true
+
+      - name: Bump version without git operations
+        run: npm version ${{ github.event.inputs.release_type }} --no-git-tag-version
+        working-directory: npm/cli
+
+      - name: Get new version
+        id: get_version
+        run: echo "VERSION=$(node -p "require('./npm/cli/package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Build platform packages
+        run: ./build.sh
+
+      - name: Commit and tag the version bump
+        run: |
+          git add npm/cli/package.json
+          git commit -m "chore: release v${{ steps.get_version.outputs.VERSION }}"
+          git tag "v${{ steps.get_version.outputs.VERSION }}"
+
+      - name: Push changes and tags
+        run: git push origin HEAD --tags
+
+      - name: Publish to npm
+        run: |
+          for d in npm/cli-*/; do
+            echo "publishing $d"
+            npm publish "$d" --access public --provenance
+          done
+          echo "publishing npm/cli"
+          npm publish npm/cli --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: v${{ steps.get_version.outputs.VERSION }}
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          generate_release_notes: true
