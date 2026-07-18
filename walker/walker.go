@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -20,11 +21,19 @@ type Walker struct {
 	IncludeAssets   bool
 }
 
+const numShards = 256
+
+type shard struct {
+	mu sync.Mutex
+	m  map[string]*Node
+}
+
 type state struct {
 	walker *Walker
 	graph  *Graph
-	mu     sync.Mutex
+	shards [numShards]shard
 	wg     sync.WaitGroup
+	sem    chan struct{}
 	failMu sync.Mutex
 }
 
@@ -36,9 +45,9 @@ func (w *Walker) Walk(entries ...string) (*Graph, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("walk: no entries")
 	}
-	s := &state{
-		walker: w,
-		graph:  &Graph{Modules: map[string]*Node{}},
+	s := &state{walker: w, graph: &Graph{}, sem: make(chan struct{}, 2*runtime.GOMAXPROCS(0))}
+	for i := range s.shards {
+		s.shards[i].m = map[string]*Node{}
 	}
 	seen := make(map[string]bool, len(entries))
 	for _, entry := range entries {
@@ -49,15 +58,31 @@ func (w *Walker) Walk(entries ...string) (*Graph, error) {
 		s.graph.Entries = append(s.graph.Entries, s.visit(entry, resolver.Resolved{Path: entry}, true))
 	}
 	s.wg.Wait()
+	s.graph.Modules = s.collect()
 	return s.graph, nil
 }
 
+func (s *state) collect() map[string]*Node {
+	total := 0
+	for i := range s.shards {
+		total += len(s.shards[i].m)
+	}
+	out := make(map[string]*Node, total)
+	for i := range s.shards {
+		for k, n := range s.shards[i].m {
+			out[k] = n
+		}
+	}
+	return out
+}
+
 func (s *state) visit(key string, res resolver.Resolved, walkable bool) *Node {
-	s.mu.Lock()
-	n, ok := s.graph.Modules[key]
+	sh := &s.shards[fnv1a(key)%numShards]
+	sh.mu.Lock()
+	n, ok := sh.m[key]
 	if !ok {
 		n = &Node{Module: &parser.Module{Path: key}, External: res.External}
-		s.graph.Modules[key] = n
+		sh.m[key] = n
 	}
 	if !res.External {
 		n.External = false
@@ -66,16 +91,31 @@ func (s *state) visit(key string, res resolver.Resolved, walkable bool) *Node {
 	if scan {
 		n.walked = true
 	}
-	s.mu.Unlock()
+	sh.mu.Unlock()
 
 	if !scan {
 		return n
 	}
 
 	s.wg.Go(func() {
+		s.sem <- struct{}{}
 		s.scan(n)
+		<-s.sem
 	})
 	return n
+}
+
+func fnv1a(s string) uint32 {
+	const (
+		offset = 2166136261
+		prime  = 16777619
+	)
+	h := uint32(offset)
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= prime
+	}
+	return h
 }
 
 func (s *state) scan(n *Node) {
