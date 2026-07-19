@@ -13,10 +13,17 @@ import (
 )
 
 type scanReport struct {
-	Entries  []entryReport `json:"entries"`
-	Union    unionStats    `json:"union"`
-	Barrels  []barrelInfo  `json:"barrels"`
-	Failures []failureInfo `json:"failures,omitempty"`
+	Entries   []entryReport    `json:"entries"`
+	Union     unionStats       `json:"union"`
+	Barrels   []barrelInfo     `json:"barrels"`
+	Externals []externalImport `json:"externals,omitempty"`
+	Failures  []failureInfo    `json:"failures,omitempty"`
+}
+
+type externalImport struct {
+	Specifier string `json:"specifier"`
+	Scope     string `json:"scope,omitempty"`
+	Importers int    `json:"importers"`
 }
 
 type failureInfo struct {
@@ -154,11 +161,21 @@ func buildReport(g *walker.Graph) scanReport {
 	sort.Slice(failures, func(i, j int) bool { return failures[i].Path < failures[j].Path })
 
 	return scanReport{
-		Entries:  entries,
-		Union:    unionStats{Modules: len(g.Modules), Externals: externals, SharedByAll: sharedByAll},
-		Barrels:  barrelList(g),
-		Failures: failures,
+		Entries:   entries,
+		Union:     unionStats{Modules: len(g.Modules), Externals: externals, SharedByAll: sharedByAll},
+		Barrels:   barrelList(g),
+		Externals: externalList(g),
+		Failures:  failures,
 	}
+}
+
+func externalList(g *walker.Graph) []externalImport {
+	imports := metrics.ExternalImports(g)
+	out := make([]externalImport, 0, len(imports))
+	for _, e := range imports {
+		out = append(out, externalImport{Specifier: e.Specifier, Scope: e.Scope, Importers: e.Importers})
+	}
+	return out
 }
 
 func addClosures(r *scanReport, g *walker.Graph) {
@@ -201,6 +218,7 @@ func writeDetail(w io.Writer, r scanReport, top int, st style) {
 	}
 
 	writeBarrels(w, r.Barrels, top, st)
+	writeExternals(w, r.Externals, top, st)
 	writeFailures(w, r.Failures, top, st)
 }
 
@@ -228,7 +246,51 @@ func writeSummary(w io.Writer, r scanReport, top int, st style) {
 	}
 
 	writeBarrels(w, r.Barrels, top, st)
+	writeExternals(w, r.Externals, top, st)
 	writeFailures(w, r.Failures, top, st)
+}
+
+func writeExternals(w io.Writer, exts []externalImport, top int, st style) {
+	if len(exts) == 0 {
+		return
+	}
+	scopeOrder := make([]string, 0)
+	scopeCount := map[string]int{}
+	for _, e := range exts {
+		if scopeCount[e.Scope] == 0 {
+			scopeOrder = append(scopeOrder, e.Scope)
+		}
+		scopeCount[e.Scope]++
+	}
+	sort.SliceStable(scopeOrder, func(i, j int) bool {
+		return scopeCount[scopeOrder[i]] > scopeCount[scopeOrder[j]]
+	})
+
+	fmt.Fprintf(w, "\n%s  %s\n", st.bold("External footprint"),
+		st.dim(fmt.Sprintf("%d packages across %d scopes", len(exts), len(scopeCount))))
+	shown := exts
+	if len(shown) > top {
+		shown = shown[:top]
+	}
+	for _, e := range shown {
+		fmt.Fprintf(w, "  %s  %s\n", st.cyan(fmt.Sprintf("%-4s", fmt.Sprintf("%d×", e.Importers))), e.Specifier)
+	}
+	if len(exts) > len(shown) {
+		fmt.Fprintf(w, "  %s\n", st.dim(fmt.Sprintf("... and %d more packages", len(exts)-len(shown))))
+	}
+
+	parts := make([]string, len(scopeOrder))
+	for i, s := range scopeOrder {
+		parts[i] = fmt.Sprintf("%s %d", scopeLabel(s), scopeCount[s])
+	}
+	fmt.Fprintf(w, "  %s %s\n", "Scopes", st.dim(strings.Join(parts, ", ")))
+}
+
+func scopeLabel(scope string) string {
+	if scope == "" {
+		return "unscoped"
+	}
+	return scope
 }
 
 func writeFailures(w io.Writer, failures []failureInfo, top int, st style) {

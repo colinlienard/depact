@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"sort"
+	"strings"
 
 	"depact/parser"
 	"depact/resolver"
@@ -117,6 +118,51 @@ func Reach(n *walker.Node) map[*walker.Node]bool {
 	return reachable(n, nil)
 }
 
+type ExternalImport struct {
+	Specifier string
+	Scope     string
+	Importers int
+}
+
+func ExternalImports(g *walker.Graph) []ExternalImport {
+	bySpec := map[string]map[*walker.Node]bool{}
+	for _, n := range g.Modules {
+		if n.External {
+			continue
+		}
+		for _, e := range n.Edges {
+			if e.To == nil || !e.To.External {
+				continue
+			}
+			spec := e.Import.From
+			if bySpec[spec] == nil {
+				bySpec[spec] = map[*walker.Node]bool{}
+			}
+			bySpec[spec][n] = true
+		}
+	}
+	out := make([]ExternalImport, 0, len(bySpec))
+	for spec, importers := range bySpec {
+		out = append(out, ExternalImport{Specifier: spec, Scope: scopeOf(spec), Importers: len(importers)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Importers != out[j].Importers {
+			return out[i].Importers > out[j].Importers
+		}
+		return out[i].Specifier < out[j].Specifier
+	})
+	return out
+}
+
+func scopeOf(specifier string) string {
+	if strings.HasPrefix(specifier, "@") {
+		if i := strings.IndexByte(specifier, '/'); i >= 0 {
+			return specifier[:i]
+		}
+	}
+	return ""
+}
+
 func Barrels(g *walker.Graph) map[string]*Barrel {
 	out := map[string]*Barrel{}
 	used := map[string]map[string]bool{}
@@ -210,8 +256,10 @@ type reexportTarget struct {
 
 func reexportTargets(barrel *walker.Node) ([]reexportTarget, map[string]bool) {
 	edgeByFrom := map[string]*walker.Node{}
+	kindByFrom := map[string]resolver.ResolveKind{}
 	for _, e := range barrel.Edges {
 		edgeByFrom[e.Import.From] = e.To
+		kindByFrom[e.Import.From] = e.Kind
 	}
 	importCount := map[string]int{}
 	for _, imp := range barrel.Module.Imports {
@@ -249,7 +297,21 @@ func reexportTargets(barrel *walker.Node) ([]reexportTarget, map[string]bool) {
 		}
 		for _, s := range exp.Symbols {
 			if s.Kind == parser.NamespaceSymbol {
-				t.names["*"] = true
+				if s.Name != "" {
+					t.names[exportKey(s)] = true
+					continue
+				}
+				if !enumerable(to, kindByFrom[exp.From]) {
+					t.names["*"] = true
+					continue
+				}
+				names, complete := exportedNames(to, map[*walker.Node]bool{})
+				for name := range names {
+					t.names[name] = true
+				}
+				if !complete {
+					t.names["*"] = true
+				}
 				continue
 			}
 			t.names[exportKey(s)] = true
@@ -260,6 +322,49 @@ func reexportTargets(barrel *walker.Node) ([]reexportTarget, map[string]bool) {
 		targets[i] = *byNode[n]
 	}
 	return targets, reexportFrom
+}
+
+func enumerable(to *walker.Node, kind resolver.ResolveKind) bool {
+	switch kind {
+	case resolver.ResolveKindFile, resolver.ResolveKindIndex, resolver.ResolveKindPackage:
+	default:
+		return false
+	}
+	return to != nil && !to.External && !to.Failed && to.Module != nil
+}
+
+func exportedNames(n *walker.Node, seen map[*walker.Node]bool) (map[string]bool, bool) {
+	if seen[n] {
+		return map[string]bool{}, true
+	}
+	seen[n] = true
+	edges := map[string]walker.Edge{}
+	for _, e := range n.Edges {
+		edges[e.Import.From] = e
+	}
+	names := map[string]bool{}
+	complete := true
+	for _, exp := range n.Module.Exports {
+		for _, s := range exp.Symbols {
+			if s.Kind == parser.NamespaceSymbol && s.Name == "" {
+				e, ok := edges[exp.From]
+				if !ok || !enumerable(e.To, e.Kind) {
+					complete = false
+					continue
+				}
+				childNames, childComplete := exportedNames(e.To, seen)
+				complete = complete && childComplete
+				for name := range childNames {
+					names[name] = true
+				}
+				continue
+			}
+			if key := exportKey(s); key != "default" {
+				names[key] = true
+			}
+		}
+	}
+	return names, complete
 }
 
 func targetUsed(names, used map[string]bool) bool {

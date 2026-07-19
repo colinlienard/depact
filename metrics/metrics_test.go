@@ -157,6 +157,29 @@ func TestWhyUnknownTarget(t *testing.T) {
 	}
 }
 
+func TestExternalImports(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":                         file("import 'acme'\nimport '@scope/one'\nimport './a'"),
+		"src/a.ts":                             file("import 'acme'\nimport '@scope/two'"),
+		"node_modules/acme/package.json":       file(`{"main":"index.js"}`),
+		"node_modules/acme/index.js":           file(`module.exports = 1`),
+		"node_modules/@scope/one/package.json": file(`{"main":"index.js"}`),
+		"node_modules/@scope/one/index.js":     file(`module.exports = 1`),
+		"node_modules/@scope/two/package.json": file(`{"main":"index.js"}`),
+		"node_modules/@scope/two/index.js":     file(`module.exports = 1`),
+	}, "src/entry.ts")
+
+	got := ExternalImports(g)
+	want := []ExternalImport{
+		{Specifier: "acme", Scope: "", Importers: 2},
+		{Specifier: "@scope/one", Scope: "@scope", Importers: 1},
+		{Specifier: "@scope/two", Scope: "@scope", Importers: 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("ExternalImports = %+v, want %+v", got, want)
+	}
+}
+
 func TestBarrels(t *testing.T) {
 	g := walk(t, fstest.MapFS{
 		"src/entry.ts":     file(`import { Button } from './ui'`),
@@ -251,20 +274,167 @@ func TestBarrelWasteSingleEntry(t *testing.T) {
 	}
 }
 
-// `export *` targets can't be attributed by name in phase 1, so they fail open
-// (assumed used) and never count as waste.
-func TestBarrelWasteStarFailsOpen(t *testing.T) {
+// An `export *` target whose enumerated names are all unused is wasted, and its
+// whole subtree is counted as barrel-exclusive.
+func TestBarrelWasteStarUnusedNames(t *testing.T) {
 	g := walk(t, fstest.MapFS{
 		"src/entry.ts":    file(`import { A } from './ui'`),
 		"src/ui/index.ts": file("export { A } from './a'\nexport * from './b'"),
-		"src/a.ts":        file(`export const A = 1`),
-		"src/b.ts":        file("import './bdep'\nexport const B = 1"),
-		"src/bdep.ts":     file(`export const d = 1`),
+		"src/ui/a.ts":     file(`export const A = 1`),
+		"src/ui/b.ts":     file("import './bdep'\nexport const B = 1"),
+		"src/ui/bdep.ts":  file(`export const d = 1`),
 	}, "src/entry.ts")
 
 	b := Barrels(g)["src/ui/index.ts"]
-	if b.Reexports != 2 || b.UsedTargets != 2 || b.Wasted != 0 || b.WastedTargets != nil {
-		t.Errorf("star re-export must fail open, got %+v", b)
+	if b == nil {
+		t.Fatal("expected barrel src/ui/index.ts")
+	}
+	if b.Reexports != 2 || b.UsedTargets != 1 {
+		t.Errorf("expected reexports=2 usedTargets=1, got reexports=%d usedTargets=%d", b.Reexports, b.UsedTargets)
+	}
+	// b exports only B (unused); its subtree b + bdep is wasted.
+	if b.Wasted != 2 {
+		t.Errorf("expected wasted=2, got %d", b.Wasted)
+	}
+	want := []string{"src/ui/b.ts"}
+	if !reflect.DeepEqual(b.WastedTargets, want) {
+		t.Errorf("wastedTargets = %v, want %v", b.WastedTargets, want)
+	}
+}
+
+// An `export *` target that provides a symbol an importer actually uses is not
+// wasted — enumeration finds the used name.
+func TestBarrelWasteStarUsedName(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { A, B } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * from './b'"),
+		"src/ui/a.ts":     file(`export const A = 1`),
+		"src/ui/b.ts":     file(`export const B = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("star target providing a used name must not be wasted, got %+v", b)
+	}
+	if b.UsedTargets != 2 {
+		t.Errorf("expected usedTargets=2, got %d", b.UsedTargets)
+	}
+}
+
+// A nested `export *` chain (barrel * -> mid * -> leaf) is followed to the leaf's
+// own names, so a used leaf symbol keeps the whole chain.
+func TestBarrelWasteStarNestedChain(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { A, Leaf } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * from './mid'"),
+		"src/ui/a.ts":     file(`export const A = 1`),
+		"src/ui/mid.ts":   file("export * from './leaf'"),
+		"src/ui/leaf.ts":  file(`export const Leaf = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("used leaf name across a star chain must keep it, got %+v", b)
+	}
+	if b.UsedTargets != 2 {
+		t.Errorf("expected usedTargets=2, got %d", b.UsedTargets)
+	}
+}
+
+// `export * as ns` is a single named export "ns"; its target's inner names are
+// NOT forwarded, so it is wasted unless "ns" itself is used.
+func TestBarrelWasteStarAsNamespace(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		// Importing b's inner name B must NOT save the namespace re-export.
+		"src/entry.ts":    file(`import { A, B } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * as ns from './b'"),
+		"src/ui/a.ts":     file(`export const A = 1`),
+		"src/ui/b.ts":     file(`export const B = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil {
+		t.Fatal("expected barrel src/ui/index.ts")
+	}
+	if b.UsedTargets != 1 {
+		t.Errorf("expected usedTargets=1, got %d", b.UsedTargets)
+	}
+	want := []string{"src/ui/b.ts"}
+	if !reflect.DeepEqual(b.WastedTargets, want) {
+		t.Errorf("wastedTargets = %v, want %v", b.WastedTargets, want)
+	}
+}
+
+// `export * as ns` used by name is kept, and only its single "ns" name matters.
+func TestBarrelWasteStarAsNamespaceUsed(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { ns } from './ui'`),
+		"src/ui/index.ts": file("export * as ns from './b'"),
+		"src/ui/b.ts":     file(`export const B = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("used namespace re-export must not be wasted, got %+v", b)
+	}
+}
+
+// An `export *` reaching an external/unresolved target can't be enumerated, so it
+// fails open (assumed used) and never counts as waste.
+func TestBarrelWasteStarExternalFailsOpen(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { A } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * from 'some-pkg'"),
+		"src/ui/a.ts":     file(`export const A = 1`),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil || b.Wasted != 0 || b.WastedTargets != nil {
+		t.Errorf("unresolvable star target must fail open, got %+v", b)
+	}
+	if b.UsedTargets != 2 {
+		t.Errorf("expected usedTargets=2, got %d", b.UsedTargets)
+	}
+}
+
+// `export *` does not forward a default export, so a target exposing only a
+// default contributes no names and is wasted if nothing else uses it.
+func TestBarrelWasteStarDefaultNotForwarded(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { A } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * from './b'"),
+		"src/ui/a.ts":     file(`export const A = 1`),
+		"src/ui/b.ts":     file("export default function () {}"),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil {
+		t.Fatal("expected barrel src/ui/index.ts")
+	}
+	want := []string{"src/ui/b.ts"}
+	if !reflect.DeepEqual(b.WastedTargets, want) {
+		t.Errorf("wastedTargets = %v, want %v", b.WastedTargets, want)
+	}
+}
+
+// A cycle in the star graph terminates and stays "complete", so the target is
+// still enumerated (and wasted here, since none of its names is used).
+func TestBarrelWasteStarCycle(t *testing.T) {
+	g := walk(t, fstest.MapFS{
+		"src/entry.ts":    file(`import { A } from './ui'`),
+		"src/ui/index.ts": file("export { A } from './a'\nexport * from './b'"),
+		"src/ui/a.ts":     file(`export const A = 1`),
+		"src/ui/b.ts":     file("export * from './c'\nexport const B = 1"),
+		"src/ui/c.ts":     file("export * from './b'\nexport const C = 1"),
+	}, "src/entry.ts")
+
+	b := Barrels(g)["src/ui/index.ts"]
+	if b == nil {
+		t.Fatal("expected barrel src/ui/index.ts")
+	}
+	want := []string{"src/ui/b.ts"}
+	if !reflect.DeepEqual(b.WastedTargets, want) {
+		t.Errorf("wastedTargets = %v, want %v", b.WastedTargets, want)
 	}
 }
 
